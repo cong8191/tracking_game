@@ -19,21 +19,24 @@ const { Pool } = require('pg');
 // Thay new Client bằng new Pool
 const db = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false },
-  max: 20, // Tối đa 20 kết nối cùng lúc
-  idleTimeoutMillis: 30000, // Tự đóng kết nối nếu rảnh quá 30s
-  connectionTimeoutMillis: 2000, // Chờ kết nối tối đa 2s
+  ssl: {
+    rejectUnauthorized: false, // ⚠️ QUAN TRỌNG: Bắt buộc phải có dòng này khi deploy lên Render/Heroku
+  },
+  connectionTimeoutMillis: 10000, // ⚠️ QUAN TRỌNG: Tăng thời gian chờ lên 10s (đề phòng DB đang ngủ)
+  idleTimeoutMillis: 30000,       // Đóng kết nối nếu rảnh quá 30s
+  max: 20,                        // Tối đa 20 kết nối cùng lúc
 });
 
-// Pool không cần gọi db.connect() thủ công ở đây để giữ kết nối.
-// Nó sẽ TỰ ĐỘNG kết nối khi có query đầu tiên.
-// Nhưng nếu muốn check kết nối lúc start server cho yên tâm thì dùng đoạn này:
+// Test kết nối khi khởi động Server
 db.connect()
   .then(client => {
-    console.log('✅ Connected to PostgreSQL (Pool)');
-    client.release(); // Quan trọng: Check xong phải nhả kết nối ra để người khác dùng
+    console.log('✅ Đã kết nối PostgreSQL thành công!');
+    client.release(); // Nhả kết nối ngay sau khi test xong
   })
-  .catch(err => console.error('❌ Connection error', err.stack));
+  .catch(err => {
+    console.error('❌ Lỗi kết nối Database:', err.message);
+    // Không exit process để server vẫn chạy, lỡ DB dậy muộn thì request sau vẫn xử lý được
+  });
 // ------------------------
 
 const FormData1 = require('form-data');
