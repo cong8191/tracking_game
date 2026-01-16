@@ -53,10 +53,11 @@ app.use(express.json());
 app.use(cors());
 
 
-app.get('/saveLoginData', async (req, res) => {
+app.post('/saveLoginData', async (req, res) => {
   try {
+    const { datas } = req.body;
     // Lưu cookies và csrfToken vào file
-    fs.writeFileSync('cookies.json', req.query.datas);
+    fs.writeFileSync('cookies.json', datas);
     res.json({ success: true });
   } catch (error) {
     console.error('Login failed:', error);
@@ -64,6 +65,41 @@ app.get('/saveLoginData', async (req, res) => {
   }
 });
 
+app.get('/readDataCookies', async (req, res) => {
+  try {
+    const dataStr = fs.existsSync('cookies.json') ? fs.readFileSync('cookies.json', 'utf-8') : '';
+    let form = new FormData();
+    
+    const datas = dataStr != '' ? JSON.parse(dataStr) : {};
+
+    if (datas.length === 0) {
+      res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
+      return;
+    }
+
+    form.append('csrf', datas.csrf);
+    form.append('id', '1');
+
+    let response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/manage', form, {
+      headers: {
+        Cookie: datas.cookies,
+        "Content-Type": "text/html; charset=UTF-8", 
+      },
+      responseType: "text"
+    });
+
+    if(response.data?.indexOf('error_message') != -1) {
+      res.json({ success: true, result: '' });
+    }
+
+    res.json({ success: true, result: dataStr });
+  } catch (err) {
+    console.error("❌ loi doc data cookie:", err.message);
+    res.status(500).json({ error: err.message });
+    return;
+  }
+
+});
 // API: /games?date=YYYY-MM-DD
 app.get('/games', (req, res) => {
   const date = req.query.date;
@@ -159,10 +195,13 @@ app.post('/getInfo', async (req, res) => {
   try {
     const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
 
+    console.log(datas);
     if (datas.length === 0) {
       res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
       return;
     }
+
+    
 
     let form = new FormData();
     
@@ -234,7 +273,7 @@ app.post('/upload', upload2.single('file'), async (req, res) => {
 
 app.get('/events', async (req, res) => {
   const sql = `
-    SELECT event.*, games.name AS gameName
+    SELECT event.*, games.name AS "gameName"
     FROM event
     INNER JOIN games ON event.gameid = games.id
   `;
@@ -266,7 +305,7 @@ app.get('/listGame', async (req, res) => {
 function getEventByIdAsync(id) {
   return new Promise((resolve, reject) => {
     // Postgres dùng $1
-    db.query("SELECT event.*, games.name as gameName FROM event inner join games on event.gameid = games.id WHERE event.id = $1", [id], (err, resDb) => {
+    db.query('SELECT event.*, games.name as "gameName" FROM event inner join games on event.gameid = games.id WHERE event.id = $1', [id], (err, resDb) => {
       if (err) return reject(err);
       if (!resDb.rows[0]) return resolve(null); // Lấy phần tử đầu tiên
 
@@ -360,7 +399,8 @@ app.post('/action', async (req, res) => {
   try {
     if(type != 'nochanged') {
       const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
-
+      console.log(datas);
+      
       if (datas.length === 0) {
               res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
         return;
@@ -390,7 +430,7 @@ app.post('/action', async (req, res) => {
       
       
       form = new FormData();
-      form.append('csrf', csrfToken);
+      form.append('csrf', datas.csrf);
 
       form.append('end', dayjs(to).format("MMMM D, YYYY"));
       form.append('start', dayjs(from).format("MMMM D, YYYY"));
@@ -431,6 +471,8 @@ app.post('/action', async (req, res) => {
         str = (event.g_name || '') != '' ? `-Added tracker date ${extra}for ${event.g_name} ( ${event.name} ) (${strDate})` : `-Added tracker date ${extra}for ${event.name} (${strDate})`
     }
      
+    // console.log( event.game_name);
+    
     const params = {
       date: dayjs(date).format("DD/MM/YYYY"),
       name: event.game_name,
@@ -441,7 +483,9 @@ app.post('/action', async (req, res) => {
       headers: { "Content-Type": "application/json" }
     });
 
+    console.log("thanh cong")
     // res.json({ success: true, result: response.data });
+    // return;
 
 
   } catch (err) {
