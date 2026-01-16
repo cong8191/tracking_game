@@ -402,7 +402,7 @@ app.post('/action', async (req, res) => {
 
       response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/plugin', form, {
         headers: {
-          Cookie: cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; '),
+          Cookie: datas.cookies,
           "Content-Type": "text/html; charset=UTF-8", 
         },
         responseType: "text"
