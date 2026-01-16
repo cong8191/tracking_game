@@ -1,8 +1,6 @@
 require("dotenv").config();
 const express = require('express');
-// const sqlite3 = require('sqlite3').verbose(); // BỎ
 const app = express();
-const puppeteer = require('puppeteer');
 const dayjs = require('dayjs');
 const fs = require('fs');
 const path = require('path');
@@ -54,14 +52,12 @@ const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwzIlzn5gfKE3
 app.use(express.json());
 app.use(cors());
 
-// Route đăng nhập
-app.get('/login', async (req, res) => {
+
+app.get('/saveLoginData', async (req, res) => {
   try {
-    const { csrfToken, cookies } = await login();
     // Lưu cookies và csrfToken vào file
-    fs.writeFileSync('cookies.json', JSON.stringify(cookies));
-    fs.writeFileSync('csrfToken.txt', csrfToken);
-    res.json({ success: true, csrfToken });
+    fs.writeFileSync('cookies.json', req.query.datas);
+    res.json({ success: true });
   } catch (error) {
     console.error('Login failed:', error);
     res.json({ success: false, message: error });
@@ -161,22 +157,21 @@ app.get('/games', (req, res) => {
 app.post('/getInfo', async (req, res) => {
   const { event_id } = req.body;
   try {
-    const cookies = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
-    const csrfToken = fs.existsSync('csrfToken.txt') ? fs.readFileSync('csrfToken.txt', 'utf8') : '';
+    const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
 
-    if (cookies.length === 0 || !csrfToken) {
+    if (datas.length === 0) {
       res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
       return;
     }
 
     let form = new FormData();
     
-    form.append('csrf', csrfToken);
+    form.append('csrf', datas.csrf);
     form.append('id', event_id);
 
     let response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', form, {
       headers: {
-        Cookie: cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; '),
+        Cookie: datas.cookies,
         "Content-Type": "text/html; charset=UTF-8", 
       },
       responseType: "text"
@@ -197,9 +192,9 @@ app.post('/getInfo', async (req, res) => {
 const upload2 = multer({ dest: 'uploads/' });
 app.post('/upload', upload2.single('file'), async (req, res) => {
   try {
-    const cookies = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
+    const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
 
-    if (cookies.length === 0) {
+    if (datas.length === 0) {
       return res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
     }
 
@@ -222,7 +217,7 @@ app.post('/upload', upload2.single('file'), async (req, res) => {
       {
         headers: {
           ...form.getHeaders(),
-          Cookie: cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; ')
+          Cookie: datas.cookies
         }
       }
     );
@@ -364,16 +359,15 @@ app.post('/action', async (req, res) => {
 
   try {
     if(type != 'nochanged') {
-      const cookies = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
-      const csrfToken = fs.existsSync('csrfToken.txt') ? fs.readFileSync('csrfToken.txt', 'utf8') : '';
+      const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
 
-      if (cookies.length === 0 || !csrfToken) {
+      if (datas.length === 0) {
               res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
         return;
       }
 
       let form = new FormData();
-      form.append('csrf', csrfToken);
+      form.append('csrf', datas.csrf);
 
       form.append('action', "getEventsById");
       form.append('plugin', "event");
@@ -386,7 +380,7 @@ app.post('/action', async (req, res) => {
 
       let response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/plugin', form, {
         headers: {
-          Cookie: cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; '),
+          Cookie: datas.cookies,
           "Content-Type": "text/html; charset=UTF-8", 
         },
         responseType: "text"
@@ -555,40 +549,6 @@ app.post('/actions', async (req, res) => {
 });
 
 
-
-// Hàm đăng nhập và lấy cookie, csrf token
-async function login() {
-const browser = await puppeteer.launch({
-  headless: true,
-  args: ['--no-sandbox', '--disable-setuid-sandbox'],
-  timeout: 0
-});
-  const page = await browser.newPage();
-  
-  await page.goto('https://my.liquidandgrit.com/admin/login', { waitUntil: 'networkidle2' });
-  // Điền thông tin vào ô username và password
- await page.type('input[name="email"]', 'trancongphanvinh@gmail.com');  // Sửa lại "your_username" thành tên đăng nhập thực tế
- await page.type('input[name="password"]', 'tracker01');  // Sửa lại "your_password" thành mật khẩu thực tế
- 
- // Nhấn nút đăng nhập
- await page.click('#submit');  // Sửa lại selector nếu cần để đúng với nút đăng nhập
- 
-  // Nhấn nút đăng nhập
-  await page.click('#submit');
-  await page.waitForNavigation({ waitUntil: 'networkidle2' });
-
-  // Lấy cookie và CSRF token
-  const cookies = await page.cookies();
-  const csrfToken = await page.evaluate(() => {
-    return window.csrfHash || null;  // Lấy csrfHash từ trang
-  });
-
-  // Đóng trình duyệt
-  await browser.close();
-
-  return { csrfToken, cookies };
-}
-
 // PHẦN UPLOAD SQLITE CŨ - GIỮ NGUYÊN NHƯNG KHÔNG DÙNG ĐƯỢC CHO POSTGRES
 // Bạn có thể xóa đi nếu muốn
 const storage = multer.diskStorage({
@@ -647,10 +607,9 @@ app.post('/search-gallery', async (req, res) => {
           res.status(500).json({ error: 'Tim theo game truoc' });
           return;
       };
-    const cookies = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
-    const csrfToken = fs.existsSync('csrfToken.txt') ? fs.readFileSync('csrfToken.txt', 'utf8') : '';
+    const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
 
-    if (cookies.length === 0 || !csrfToken) {
+    if (datas.length === 0) {
             res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
       return;
     }
@@ -668,7 +627,7 @@ app.post('/search-gallery', async (req, res) => {
     obj.tag18 = [tagId.toString()];
     let form = new FormData();
 
-        form.append('csrf', csrfToken);
+        form.append('csrf', datas.csrf);
 
     form.append('cnd_config_dir', "/cms/blog/gallery");
     form.append('config_case', "gallery");
@@ -683,7 +642,7 @@ app.post('/search-gallery', async (req, res) => {
 
     let response = await axios.post('https://my.liquidandgrit.com/action/public/cms/blog/cnd', form, {
       headers: {
-        Cookie: cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; '),
+        Cookie: datas.cookies,
         "Content-Type": "text/html; charset=UTF-8", 
       },
       responseType: "text"
@@ -737,10 +696,9 @@ const { galleryName , gameId} = req.body;
           res.status(500).json({ error: 'Nhập input truoc' });
           return;
       };
-    const cookies = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
-    const csrfToken = fs.existsSync('csrfToken.txt') ? fs.readFileSync('csrfToken.txt', 'utf8') : '';
+    const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
 
-    if (cookies.length === 0 || !csrfToken) {
+    if (datas.length === 0 ) {
       res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
       return;
     }
@@ -758,7 +716,7 @@ const { galleryName , gameId} = req.body;
     obj.search = galleryName;
 
     let form = new FormData();
-    form.append('csrf', csrfToken);
+    form.append('csrf', datas.csrf);
     form.append('id', '1');
     form.append('vo-action', '');
     form.append('filter_conditions', JSON.stringify(obj))
@@ -769,7 +727,7 @@ const { galleryName , gameId} = req.body;
 
     let response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/post-cnd', form, {
       headers: {
-        Cookie: cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; '),
+        Cookie: datas.cookies,
         "Content-Type": "text/html; charset=UTF-8", 
       },
       // responseType: "text"
