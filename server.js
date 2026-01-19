@@ -716,6 +716,8 @@ function getGameByIdAsync(gameId) {
       if (!resDb.rows[0]) return resolve(null);
 
       const row = resDb.rows[0];
+      console.log(JSON.stringify(row));
+      
       const eventObject = {
         ...row,
         tagId: row.tagid, // Cẩn thận case-sensitive: DB Postgres thường trả về lowercase cột (tagid)
