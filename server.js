@@ -88,7 +88,9 @@ app.get('/readDataCookies', async (req, res) => {
       responseType: "text"
     });
 
-    if(response.data?.indexOf('error_message') != -1) {
+    const data = JSON.parse(response.data);
+
+    if(!data.blogData) {
       res.json({ success: true, result: '' });
       return;
     }
@@ -114,7 +116,8 @@ app.get('/games', (req, res) => {
         e.name AS event_name,
         e.gallery_id,
         e.default_day,
-        e.g_name
+        e.g_name,
+        e.post_slug
     FROM games g
     LEFT JOIN event e ON g.id = e.gameid
     and e."IsContent" = true
