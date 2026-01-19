@@ -413,7 +413,7 @@ app.post('/createNewGallery', async (req, res) => {
 });
 
 app.post('/event', (req, res) => {
-  const { name, gallery_id, g_name, gameId, default_day, eventId } = req.body;
+  const { name, gallery_id, g_name, gameId, default_day, eventId, post_slug } = req.body;
 
   if (!name || !gallery_id) {
     return res.status(400).json({ error: 'Thiếu dữ liệu: name, gallery_id là bắt buộc.' });
@@ -424,10 +424,10 @@ app.post('/event', (req, res) => {
     // Thay ? bằng $1, $2...
     const updateSql = `
       UPDATE event 
-      SET name = $1, gallery_id = $2, g_name = $3, gameid = $4, default_day = $5
+      SET name = $1, gallery_id = $2, g_name = $3, gameid = $4, default_day = $5, post_slug = $7
       WHERE id = $6
     `;
-    db.query(updateSql, [name, gallery_id, g_name, gameId, default_day, eventId], function (err) {
+    db.query(updateSql, [name, gallery_id, g_name, gameId, default_day, eventId, post_slug], function (err) {
       if (err) {
         console.error('❌ Update error:', err);
         return res.status(500).json({ error: 'Lỗi khi cập nhật sự kiện.' });
@@ -445,10 +445,10 @@ app.post('/event', (req, res) => {
     // Trường hợp INSERT
     // Postgres cần RETURNING id để lấy ID vừa tạo
     const insertSql = `
-      INSERT INTO event (gameid, name, gallery_id, default_day, g_name)
-      VALUES ($1, $2, $3, $4, $5) RETURNING id
+      INSERT INTO event (gameid, name, gallery_id, default_day, g_name, post_slug)
+      VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
     `;
-    db.query(insertSql, [gameId, name, gallery_id, default_day, g_name], function (err, resDb) {
+    db.query(insertSql, [gameId, name, gallery_id, default_day, g_name, post_slug], function (err, resDb) {
       if (err) {
         console.error('❌ Insert error:', err);
         return res.status(500).json({ error: 'Lỗi khi thêm sự kiện.' });
