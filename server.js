@@ -117,6 +117,7 @@ app.get('/games', (req, res) => {
         e.g_name
     FROM games g
     LEFT JOIN event e ON g.id = e.gameid
+    and e.IsContent = true
     ORDER BY g.id, e.id
   `;
 
@@ -163,6 +164,7 @@ app.get('/games', (req, res) => {
             gallery_id: row.gallery_id,
             default_day: row.default_day,
             g_name:  row.g_name,
+            post_slug: row.post_slug || ''
           });
         }
       }
@@ -365,10 +367,10 @@ app.post('/createNewGallery', async (req, res) => {
     const data = JSON.parse(response.data);
 
     const insertSql = `
-      INSERT INTO event (gameid, name, gallery_id, "IsContent")
-      VALUES ($1, $2, $3, $4) RETURNING id
+      INSERT INTO event (gameid, name, gallery_id, "IsContent", post_slug)
+      VALUES ($1, $2, $3, $4, $5) RETURNING id
     `;
-    db.query(insertSql, [gameId, galleryName, data.gallery_id, IsContent], function (err, resDb) {
+    db.query(insertSql, [gameId, galleryName, data.gallery_id, IsContent, data.post_slug], function (err, resDb) {
       if (err) {
         console.error('❌ Insert error:', err);
         return res.status(500).json({ error: 'Lỗi khi thêm sự kiện.' });
@@ -393,6 +395,9 @@ app.post('/createNewGallery', async (req, res) => {
       responseType: "text"
     });
 
+    res.json({
+        success: true
+      });
     // data.gallery_id
     // data.post_slug
 
