@@ -120,7 +120,7 @@ app.get('/games', (req, res) => {
         e.post_slug
     FROM games g
     LEFT JOIN event e ON g.id = e.gameid
-    and e."IsContent" <> true
+    AND COALESCE(e."IsContent", false) <> true
     ORDER BY g.id, e.id
   `;
 
