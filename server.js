@@ -90,6 +90,7 @@ app.get('/readDataCookies', async (req, res) => {
 
     if(response.data?.indexOf('error_message') != -1) {
       res.json({ success: true, result: '' });
+      return;
     }
 
     res.json({ success: true, result: dataStr });
@@ -322,6 +323,86 @@ function getEventByIdAsync(id) {
     });
   });
 }
+
+app.post('/createNewGallery', async (req, res) => {
+  const { gameId, galleryName, IsContent } = req.body;
+  if (!gameId || !galleryName) {
+    return res.status(400).json({ error: 'Thiếu dữ liệu: gameId, galleryName là bắt buộc.' });
+  }
+
+  const game = await getGameByIdAsync(gameId);
+  if (!game) {
+    return res.status(400).json({ error: 'Thiếu dữ liệu: game' });
+  }
+
+  try {
+
+    const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
+
+    console.log(datas);
+    if (datas.length === 0) {
+      res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
+      return;
+    }
+  
+    let form = new FormData();
+    
+    form.append('csrf', datas.csrf);
+    form.append('post[name]', `${galleryName} - ${game.app_name}`);
+    form.append('blog_id', '1');
+    form.append('post[cms_page_blog_id]', '1');
+    form.append('post[type]', 'gallery');
+    form.append('vo-action', 'insert');
+
+    let response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', form, {
+      headers: {
+        Cookie: datas.cookies,
+        "Content-Type": "text/html; charset=UTF-8", 
+      },
+      responseType: "text"
+    });
+
+    const data = JSON.parse(response.data);
+
+    const insertSql = `
+      INSERT INTO event (gameid, name, gallery_id, "IsContent")
+      VALUES ($1, $2, $3, $4) RETURNING id
+    `;
+    db.query(insertSql, [gameId, galleryName, data.gallery_id, IsContent], function (err, resDb) {
+      if (err) {
+        console.error('❌ Insert error:', err);
+        return res.status(500).json({ error: 'Lỗi khi thêm sự kiện.' });
+      }
+    });
+
+    form = new FormData();
+    
+    form.append('csrf', datas.csrf);
+    form.append('tag_group_id', '18');
+    form.append('tag_id', game.tagId);
+    form.append('id', data.gallery_id);
+    form.append('relate_id', data.gallery_id);
+    form.append('type', 'gallery');
+    form.append('vo-action', 'tag_group_relate_gallery');
+
+    response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', form, {
+      headers: {
+        Cookie: datas.cookies,
+        "Content-Type": "text/html; charset=UTF-8", 
+      },
+      responseType: "text"
+    });
+
+    // data.gallery_id
+    // data.post_slug
+
+  } catch (err) {
+      console.error("❌ lỗi tạo gallery:", err.message);
+      res.status(500).json({ error: err.message });
+      return;
+    }
+
+});
 
 app.post('/event', (req, res) => {
   const { name, gallery_id, g_name, gameId, default_day, eventId } = req.body;
@@ -636,7 +717,8 @@ function getGameByIdAsync(gameId) {
 
       const row = resDb.rows[0];
       const eventObject = {
-        tagId: row.tagId, // Cẩn thận case-sensitive: DB Postgres thường trả về lowercase cột (tagid)
+        ...row,
+        tagId: row.tagid, // Cẩn thận case-sensitive: DB Postgres thường trả về lowercase cột (tagid)
       };
 
       resolve(eventObject);
