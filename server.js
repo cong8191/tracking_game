@@ -117,7 +117,7 @@ app.get('/games', (req, res) => {
         e.g_name
     FROM games g
     LEFT JOIN event e ON g.id = e.gameid
-    and e.IsContent = true
+    and e."IsContent" = true
     ORDER BY g.id, e.id
   `;
 
