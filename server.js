@@ -720,7 +720,7 @@ function getGameByIdAsync(gameId) {
       
       const eventObject = {
         ...row,
-        tagId: row.tagid, // Cẩn thận case-sensitive: DB Postgres thường trả về lowercase cột (tagid)
+        tagId: row.tagId, // Cẩn thận case-sensitive: DB Postgres thường trả về lowercase cột (tagid)
       };
 
       resolve(eventObject);
