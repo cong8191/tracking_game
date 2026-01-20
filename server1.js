@@ -1,6 +1,8 @@
-require("dotenv").config();
+
 const express = require('express');
+const sqlite3 = require('sqlite3').verbose();
 const app = express();
+const puppeteer = require('puppeteer');
 const dayjs = require('dayjs');
 const fs = require('fs');
 const path = require('path');
@@ -9,34 +11,7 @@ const PORT = process.env.PORT || 3000;
 const cors = require('cors');
 const multer = require('multer');
 const upload = multer({ storage: multer.memoryStorage() });
-
-// --- KẾT NỐI POSTGRES ---
-// Thay Client bằng Pool
-const { Pool } = require('pg'); 
-
-// Thay new Client bằng new Pool
-const db = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false, // ⚠️ QUAN TRỌNG: Bắt buộc phải có dòng này khi deploy lên Render/Heroku
-  },
-  connectionTimeoutMillis: 10000, // ⚠️ QUAN TRỌNG: Tăng thời gian chờ lên 10s (đề phòng DB đang ngủ)
-  idleTimeoutMillis: 30000,       // Đóng kết nối nếu rảnh quá 30s
-  max: 20,                        // Tối đa 20 kết nối cùng lúc
-});
-
-// Test kết nối khi khởi động Server
-db.connect()
-  .then(client => {
-    console.log('✅ Đã kết nối PostgreSQL thành công!');
-    client.release(); // Nhả kết nối ngay sau khi test xong
-  })
-  .catch(err => {
-    console.error('❌ Lỗi kết nối Database:', err.message);
-    // Không exit process để server vẫn chạy, lỡ DB dậy muộn thì request sau vẫn xử lý được
-  });
-// ------------------------
-
+const db = new sqlite3.Database('./sample_game_db.sqlite');
 const FormData1 = require('form-data');
 const { log } = require('console');
 const cheerio = require('cheerio');
@@ -52,57 +27,20 @@ const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwzIlzn5gfKE3
 app.use(express.json());
 app.use(cors());
 
-
-app.post('/saveLoginData', async (req, res) => {
+// Route đăng nhập
+app.get('/login', async (req, res) => {
   try {
-    const { datas } = req.body;
+    const { csrfToken, cookies } = await login();
     // Lưu cookies và csrfToken vào file
-    fs.writeFileSync('cookies.json', datas);
-    res.json({ success: true });
+    fs.writeFileSync('cookies.json', JSON.stringify(cookies));
+    fs.writeFileSync('csrfToken.txt', csrfToken);
+    res.json({ success: true, csrfToken });
   } catch (error) {
     console.error('Login failed:', error);
     res.json({ success: false, message: error });
   }
 });
 
-app.get('/readDataCookies', async (req, res) => {
-  try {
-    const dataStr = fs.existsSync('cookies.json') ? fs.readFileSync('cookies.json', 'utf-8') : '';
-    let form = new FormData();
-    
-    const datas = dataStr != '' ? JSON.parse(dataStr) : {};
-
-    if (datas.length === 0) {
-      res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
-      return;
-    }
-
-    form.append('csrf', datas.csrf);
-    form.append('id', '1');
-
-    let response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/manage', form, {
-      headers: {
-        Cookie: datas.cookies,
-        "Content-Type": "text/html; charset=UTF-8", 
-      },
-      responseType: "text"
-    });
-
-    const data = JSON.parse(response.data);
-
-    if(!data.blogData) {
-      res.json({ success: true, result: '' });
-      return;
-    }
-
-    res.json({ success: true, result: dataStr });
-  } catch (err) {
-    console.error("❌ loi doc data cookie:", err.message);
-    res.status(500).json({ error: err.message });
-    return;
-  }
-
-});
 // API: /games?date=YYYY-MM-DD
 app.get('/games', (req, res) => {
   const date = req.query.date;
@@ -116,15 +54,12 @@ app.get('/games', (req, res) => {
         e.name AS event_name,
         e.gallery_id,
         e.default_day,
-        e.g_name,
-        e.post_slug
+        e.g_name
     FROM games g
     LEFT JOIN event e ON g.id = e.gameid
-    AND COALESCE(e."IsContent", false) <> true
     ORDER BY g.id, e.id
   `;
 
-  // Postgres dùng $1 thay vì ?
   const sqlAction = `
     SELECT 
         a.id AS action_id,
@@ -135,17 +70,14 @@ app.get('/games', (req, res) => {
         a."to",
         a."type"
     FROM action a
-    WHERE a.date = $1 
+    WHERE a.date = ?
   `;
 
-  // db.all -> db.query
-  db.query(sql, [], (err, resDb) => {
+  db.all(sql, [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
-    const rows = resDb.rows; // Lấy rows từ kết quả
 
-    db.query(sqlAction, [date], (err2, resAction) => {
+    db.all(sqlAction, [date], (err2, actions) => {
       if (err2) return res.status(500).json({ error: err2.message });
-      const actions = resAction.rows;
 
       const result = {};
 
@@ -167,7 +99,6 @@ app.get('/games', (req, res) => {
             gallery_id: row.gallery_id,
             default_day: row.default_day,
             g_name:  row.g_name,
-            post_slug: row.post_slug || ''
           });
         }
       }
@@ -199,24 +130,22 @@ app.get('/games', (req, res) => {
 app.post('/getInfo', async (req, res) => {
   const { event_id } = req.body;
   try {
-    const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
+    const cookies = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
+    const csrfToken = fs.existsSync('csrfToken.txt') ? fs.readFileSync('csrfToken.txt', 'utf8') : '';
 
-    console.log(datas);
-    if (datas.length === 0) {
+    if (cookies.length === 0 || !csrfToken) {
       res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
       return;
     }
 
-    
-
     let form = new FormData();
     
-    form.append('csrf', datas.csrf);
+    form.append('csrf', csrfToken);
     form.append('id', event_id);
 
     let response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', form, {
       headers: {
-        Cookie: datas.cookies,
+        Cookie: cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; '),
         "Content-Type": "text/html; charset=UTF-8", 
       },
       responseType: "text"
@@ -237,9 +166,9 @@ app.post('/getInfo', async (req, res) => {
 const upload2 = multer({ dest: 'uploads/' });
 app.post('/upload', upload2.single('file'), async (req, res) => {
   try {
-    const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
+    const cookies = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
 
-    if (datas.length === 0) {
+    if (cookies.length === 0) {
       return res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
     }
 
@@ -262,7 +191,7 @@ app.post('/upload', upload2.single('file'), async (req, res) => {
       {
         headers: {
           ...form.getHeaders(),
-          Cookie: datas.cookies
+          Cookie: cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; ')
         }
       }
     );
@@ -279,17 +208,18 @@ app.post('/upload', upload2.single('file'), async (req, res) => {
 
 app.get('/events', async (req, res) => {
   const sql = `
-    SELECT event.*, games.name AS "gameName"
+    SELECT event.*, games.name AS gameName
     FROM event
     INNER JOIN games ON event.gameid = games.id
   `;
 
-  db.query(sql, [], (err, resDb) => {
+  db.all(sql, [], (err, rows) => {
     if (err) {
       console.error('❌ DB error:', err);
       return res.status(500).json({ error: 'Database error' });
     }
-    res.json(resDb.rows); // Lấy .rows
+
+    res.json(rows);
   });
 });
 
@@ -298,24 +228,23 @@ app.get('/listGame', async (req, res) => {
     SELECT * from games
   `;
 
-  db.query(sql, [], (err, resDb) => {
+  db.all(sql, [], (err, rows) => {
     if (err) {
       console.error('❌ DB error:', err);
       return res.status(500).json({ error: 'Database error' });
     }
-    res.json(resDb.rows);
+
+    res.json(rows);
   });
 });
 
 
 function getEventByIdAsync(id) {
   return new Promise((resolve, reject) => {
-    // Postgres dùng $1
-    db.query('SELECT event.*, games.name as "gameName" FROM event inner join games on event.gameid = games.id WHERE event.id = $1', [id], (err, resDb) => {
+    db.get("SELECT event.*, games.name as gameName FROM event inner join games on event.gameid = games.id WHERE event.id = ?", [id], (err, row) => {
       if (err) return reject(err);
-      if (!resDb.rows[0]) return resolve(null); // Lấy phần tử đầu tiên
+      if (!row) return resolve(null);
 
-      const row = resDb.rows[0];
       const eventObject = {
         event_id: row.id,
         name: row.name,
@@ -329,119 +258,8 @@ function getEventByIdAsync(id) {
   });
 }
 
-app.post('/createNewGallery', async (req, res) => {
-  const { gameId, galleryName, IsContent, publicDate } = req.body;
-  if (!gameId || !galleryName) {
-    return res.status(400).json({ error: 'Thiếu dữ liệu: gameId, galleryName là bắt buộc.' });
-  }
-
-  const game = await getGameByIdAsync(gameId);
-  if (!game) {
-    return res.status(400).json({ error: 'Thiếu dữ liệu: game' });
-  }
-
-  try {
-
-    const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
-
-    console.log(datas);
-    if (datas.length === 0) {
-      res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
-      return;
-    }
-  
-    let form = new FormData();
-    
-    form.append('csrf', datas.csrf);
-    form.append('post[name]', `${galleryName} - ${game.app_name}`);
-    form.append('blog_id', '1');
-    form.append('post[cms_page_blog_id]', '1');
-    form.append('post[type]', 'gallery');
-    form.append('vo-action', 'insert');
-
-    let response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', form, {
-      headers: {
-        Cookie: datas.cookies,
-        "Content-Type": "text/html; charset=UTF-8", 
-      },
-      responseType: "text"
-    });
-
-    const data = JSON.parse(response.data);
-
-    const insertSql = `
-      INSERT INTO event (gameid, name, gallery_id, "IsContent", post_slug)
-      VALUES ($1, $2, $3, $4, $5) RETURNING id
-    `;
-    db.query(insertSql, [gameId, galleryName, data.gallery_id, IsContent, data.post_slug], function (err, resDb) {
-      if (err) {
-        console.error('❌ Insert error:', err);
-        return res.status(500).json({ error: 'Lỗi khi thêm sự kiện.' });
-      }
-    });
-
-    form = new FormData();
-    form.append('csrf', datas.csrf);
-    form.append('tag_group_id', '18');
-    form.append('tag_id', game.tagId);
-    form.append('id', data.gallery_id);
-    form.append('relate_id', data.gallery_id);
-    form.append('type', 'gallery');
-    form.append('vo-action', 'tag_group_relate_gallery');
-
-    response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', form, {
-      headers: {
-        Cookie: datas.cookies,
-        "Content-Type": "text/html; charset=UTF-8", 
-      },
-      responseType: "text"
-    });
-
-
-    const currentDate = dayjs();
-
-    form = new FormData();
-    form.append('csrf', datas.csrf);
-    form.append('vo-action', 'update_gallery_profile');
-    form.append('post[id]', data.gallery_id);
-    form.append('id', data.gallery_id);
-    form.append('post[cms_page_blog_id]', '1');
-    form.append('publish_date', publicDate);
-    form.append('post[publish][month]', dayjs(publicDate).getMonth() + 1);
-    form.append('post[publish][day]', dayjs(publicDate).date());
-    form.append('post[publish][year]', dayjs(publicDate).getFullYear());
-    form.append('post[publish][hour]', currentDate.format('h'));
-    form.append('post[publish][minute]', currentDate.format('mm'));
-    form.append('post[publish][meridian]', currentDate.format('A'));
-
-    response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', form, {
-      headers: {
-        Cookie: datas.cookies,
-        "Content-Type": "text/html; charset=UTF-8", 
-      },
-      responseType: "text"
-    });
-
-    res.json({
-        success: true,
-        result: {
-          gallery_id: data.gallery_id,
-          post_slug: data.post_slug
-        }
-      });
-    // data.gallery_id
-    // data.post_slug
-
-  } catch (err) {
-      console.error("❌ lỗi tạo gallery:", err.message);
-      res.status(500).json({ error: err.message });
-      return;
-    }
-
-});
-
 app.post('/event', (req, res) => {
-  const { name, gallery_id, g_name, gameId, default_day, eventId, post_slug } = req.body;
+  const { name, gallery_id, g_name, gameId, default_day, eventId } = req.body;
 
   if (!name || !gallery_id) {
     return res.status(400).json({ error: 'Thiếu dữ liệu: name, gallery_id là bắt buộc.' });
@@ -449,13 +267,12 @@ app.post('/event', (req, res) => {
 
  if (eventId) {
     // Trường hợp UPDATE
-    // Thay ? bằng $1, $2...
     const updateSql = `
       UPDATE event 
-      SET name = $1, gallery_id = $2, g_name = $3, gameid = $4, default_day = $5, post_slug = $7
-      WHERE id = $6
+      SET name = ?, gallery_id = ?, g_name = ?, gameid = ?, default_day = ?
+      WHERE id = ?
     `;
-    db.query(updateSql, [name, gallery_id, g_name, gameId, default_day, eventId, post_slug], function (err) {
+    db.run(updateSql, [name, gallery_id, g_name, gameId, default_day, eventId], function (err) {
       if (err) {
         console.error('❌ Update error:', err);
         return res.status(500).json({ error: 'Lỗi khi cập nhật sự kiện.' });
@@ -471,21 +288,19 @@ app.post('/event', (req, res) => {
     });
   } else {
     // Trường hợp INSERT
-    // Postgres cần RETURNING id để lấy ID vừa tạo
     const insertSql = `
-      INSERT INTO event (gameid, name, gallery_id, default_day, g_name, post_slug)
-      VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
+      INSERT INTO event (gameid, name, gallery_id, default_day, g_name)
+      VALUES (?, ?, ?, ?, ?)
     `;
-    db.query(insertSql, [gameId, name, gallery_id, default_day, g_name, post_slug], function (err, resDb) {
+    db.run(insertSql, [gameId, name, gallery_id, default_day, g_name], function (err) {
       if (err) {
         console.error('❌ Insert error:', err);
         return res.status(500).json({ error: 'Lỗi khi thêm sự kiện.' });
       }
 
-      // Postgres trả ID trong result.rows
       res.json({
         success: true,
-        lastedId: resDb.rows[0].id,
+        lastedId: this.lastID,
         name,
         gallery_id,
         g_name
@@ -515,16 +330,16 @@ app.post('/action', async (req, res) => {
 
   try {
     if(type != 'nochanged') {
-      const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
-      console.log(datas);
-      
-      if (datas.length === 0) {
+      const cookies = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
+      const csrfToken = fs.existsSync('csrfToken.txt') ? fs.readFileSync('csrfToken.txt', 'utf8') : '';
+
+      if (cookies.length === 0 || !csrfToken) {
               res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
         return;
       }
 
       let form = new FormData();
-      form.append('csrf', datas.csrf);
+      form.append('csrf', csrfToken);
 
       form.append('action', "getEventsById");
       form.append('plugin', "event");
@@ -537,7 +352,7 @@ app.post('/action', async (req, res) => {
 
       let response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/plugin', form, {
         headers: {
-          Cookie: datas.cookies,
+          Cookie: cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; '),
           "Content-Type": "text/html; charset=UTF-8", 
         },
         responseType: "text"
@@ -547,7 +362,7 @@ app.post('/action', async (req, res) => {
       
       
       form = new FormData();
-      form.append('csrf', datas.csrf);
+      form.append('csrf', csrfToken);
 
       form.append('end', dayjs(to).format("MMMM D, YYYY"));
       form.append('start', dayjs(from).format("MMMM D, YYYY"));
@@ -559,7 +374,7 @@ app.post('/action', async (req, res) => {
 
       response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/plugin', form, {
         headers: {
-          Cookie: datas.cookies,
+          Cookie: cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; '),
           "Content-Type": "text/html; charset=UTF-8", 
         },
         responseType: "text"
@@ -588,8 +403,6 @@ app.post('/action', async (req, res) => {
         str = (event.g_name || '') != '' ? `-Added tracker date ${extra}for ${event.g_name} ( ${event.name} ) (${strDate})` : `-Added tracker date ${extra}for ${event.name} (${strDate})`
     }
      
-    // console.log( event.game_name);
-    
     const params = {
       date: dayjs(date).format("DD/MM/YYYY"),
       name: event.game_name,
@@ -600,9 +413,7 @@ app.post('/action', async (req, res) => {
       headers: { "Content-Type": "application/json" }
     });
 
-    console.log("thanh cong")
     // res.json({ success: true, result: response.data });
-    // return;
 
 
   } catch (err) {
@@ -614,10 +425,9 @@ app.post('/action', async (req, res) => {
 
   if (id) {
     // Nếu có ID, kiểm tra xem đã thành công chưa
-    const checkSql = `SELECT status FROM action WHERE id = $1`;
-    db.query(checkSql, [id], (err, resDb) => {
+    const checkSql = `SELECT status FROM action WHERE id = ?`;
+    db.get(checkSql, [id], (err, row) => {
       if (err) return res.status(500).json({ error: err.message });
-      const row = resDb.rows[0];
 
       if (row && row.status === '1') {
         // Nếu đã thành công thì bỏ qua
@@ -627,10 +437,10 @@ app.post('/action', async (req, res) => {
       // Nếu chưa thành công → update và đặt lại status = '0'
       const updateSql = `
         UPDATE action
-        SET eventid = $1, date = $2, "from" = $3, "to" = $4, status = '1'
-        WHERE id = $5
+        SET eventid = ?, date = ?, "from" = ?, "to" = ?, status = '1'
+        WHERE id = ?
       `;
-      db.query(updateSql, [event_id, date, from || '', to || '', id], function (err2) {
+      db.run(updateSql, [event_id, date, from || '', to || '', id], function (err2) {
         if (err2) return res.status(500).json({ error: err2.message });
         res.json({ id, status: '1', message: "Updated" });
       });
@@ -640,84 +450,148 @@ app.post('/action', async (req, res) => {
     // Nếu không có ID → insert mới với status = '1'
     const insertSql = `
       INSERT INTO action (eventid, date, status, "from", "to", type)
-      VALUES ($1, $2, '1', $3, $4, $5) RETURNING id
+      VALUES (?, ?, '1', ?, ?,?)
     `;
-    db.query(insertSql, [event_id, date, from || '', to || '', type], function (err3, resDb) {
+    db.run(insertSql, [event_id, date, from || '', to || '', type], function (err3) {
       if (err3) return res.status(500).json({ error: err3.message });
-      res.json({ id: resDb.rows[0].id, status: '1', message: "Inserted" });
+      res.json({ id: this.lastID, status: '1', message: "Inserted" });
     });
   }
 });
 
-// ROUTE NÀY THAY ĐỔI NHIỀU NHẤT VÌ POSTGRES KHÔNG CÓ db.serialize
-app.post('/actions', async (req, res) => {
+app.post('/actions', (req, res) => {
   const records = req.body;
   if (!Array.isArray(records)) return res.status(400).json({ error: 'Payload must be an array' });
   if (records.length === 0) return res.json([]);
 
-  // Dùng Async/Await để xử lý Transaction trong Postgres
-  const client = await db.connect(); // Mượn client để transaction an toàn hơn
-  try {
-    await client.query("BEGIN"); // BEGIN TRANSACTION
+  db.serialize(() => {
+    db.run("BEGIN TRANSACTION");
 
     const results = [];
-    
-    // Duyệt qua từng record
-    for (const record of records) {
-        const { id, event_id, date, from, to, status, isDelete, type } = record;
+    let hasError = false;
+    let pending = records.length;
 
-        if (id) {
-            // Check status
-            const resCheck = await client.query(`SELECT status FROM action WHERE id = $1`, [id]);
-            const row = resCheck.rows[0];
+    const finish = () => {
+      if (hasError) {
+        db.run("ROLLBACK", () => res.status(500).json({ error: 'Transaction rolled back', results }));
+      } else {
+        db.run("COMMIT", () => res.json(results));
+      }
+    };
 
-            if (row?.status === '1') {
-                results.push({ id, status: '1', message: 'Already success. Skipped.' });
-                continue; // Bỏ qua vòng lặp này
-            }
+    records.forEach((record) => {
+      const { id, event_id, date, from, to, status, isDelete, type } = record;
 
-            if(isDelete) {
-                await client.query(`DELETE FROM action WHERE id = $1`, [id]);
-                results.push({ id, status: status || '0' });
-            } else {
-                // Update
-                await client.query(
-                    `UPDATE action SET eventid = $1, date = $2, "from" = $3, "to" = $4, status = $5, type=$6 WHERE id = $7`,
-                    [event_id, date, from || '', to || '', status || '0', type, id]
-                );
-                results.push({ id, status: status || '0' });
-            }
-        } else {
-            // INSERT
-            const resInsert = await client.query(
-                `INSERT INTO action (eventid, date, status, "from", "to", type) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-                [event_id, date, status || '0', from || '', to || '', type]
+      if (id) {
+        // Kiểm tra nếu đã status = '1' thì bỏ qua
+        db.get(`SELECT status FROM action WHERE id = ?`, [id], (err, row) => {
+          if (err) {
+            hasError = true;
+            results.push({ error: err.message, record });
+            if (--pending === 0) finish();
+            return;
+          }
+
+          if (row?.status === '1') {
+            results.push({ id, status: '1', message: 'Already success. Skipped.' });
+            if (--pending === 0) finish();
+            return;
+          }
+
+          if(isDelete) {
+            db.run(
+              `DELETE FROM action WHERE id = ?;`,
+              [id],
+              function (err2) {
+                if (err2) {
+                  hasError = true;
+                  results.push({ error: err2.message, record });
+                } else {
+                  results.push({ id, status: status || '0' });
+                }
+                if (--pending === 0) finish();
+              }
             );
-            results.push({ id: resInsert.rows[0].id, status: status || '0' });
-        }
-    }
 
-    await client.query("COMMIT"); // Commit nếu mọi thứ ok
-    res.json(results);
+            return;
+          } 
 
-  } catch (err) {
-    await client.query("ROLLBACK"); // Rollback nếu lỗi
-    console.error("Transaction Error:", err);
-    res.status(500).json({ error: 'Transaction failed', details: err.message });
-  } finally {
-    client.release(); // Trả kết nối về pool
-  }
+          // Nếu chưa thành công → UPDATE
+          db.run(
+            `UPDATE action SET eventid = ?, date = ?, "from" = ?, "to" = ?, status = ?, type=? WHERE id = ?`,
+            [event_id, date, from || '', to || '', status || '0', type, id],
+            function (err2) {
+              if (err2) {
+                hasError = true;
+                results.push({ error: err2.message, record });
+              } else {
+                results.push({ id, status: status || '0' });
+              }
+              if (--pending === 0) finish();
+            }
+          );
+        });
+      } else {
+        // INSERT
+        db.run(
+          `INSERT INTO action (eventid, date, status, "from", "to", type) VALUES (?, ?, ?, ?, ?, ?)`,
+          [event_id, date, status || '0', from || '', to || '', type],
+          function (err3) {
+            if (err3) {
+              hasError = true;
+              results.push({ error: err3.message, record });
+            } else {
+              results.push({ id: this.lastID, status: status || '0' });
+            }
+            if (--pending === 0) finish();
+          }
+        );
+      }
+    });
+  });
 });
 
 
-// PHẦN UPLOAD SQLITE CŨ - GIỮ NGUYÊN NHƯNG KHÔNG DÙNG ĐƯỢC CHO POSTGRES
-// Bạn có thể xóa đi nếu muốn
+
+// Hàm đăng nhập và lấy cookie, csrf token
+async function login() {
+const browser = await puppeteer.launch({
+  headless: true,
+  args: ['--no-sandbox', '--disable-setuid-sandbox'],
+  timeout: 0
+});
+  const page = await browser.newPage();
+  
+  await page.goto('https://my.liquidandgrit.com/admin/login', { waitUntil: 'networkidle2' });
+  // Điền thông tin vào ô username và password
+ await page.type('input[name="email"]', 'trancongphanvinh@gmail.com');  // Sửa lại "your_username" thành tên đăng nhập thực tế
+ await page.type('input[name="password"]', 'tracker01');  // Sửa lại "your_password" thành mật khẩu thực tế
+ 
+ // Nhấn nút đăng nhập
+ await page.click('#submit');  // Sửa lại selector nếu cần để đúng với nút đăng nhập
+ 
+  // Nhấn nút đăng nhập
+  await page.click('#submit');
+  await page.waitForNavigation({ waitUntil: 'networkidle2' });
+
+  // Lấy cookie và CSRF token
+  const cookies = await page.cookies();
+  const csrfToken = await page.evaluate(() => {
+    return window.csrfHash || null;  // Lấy csrfHash từ trang
+  });
+
+  // Đóng trình duyệt
+  await browser.close();
+
+  return { csrfToken, cookies };
+}
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, path.resolve(__dirname)); 
+    cb(null, path.resolve(__dirname)); // lưu ở thư mục hiện tại (cùng server.js)
   },
   filename: (req, file, cb) => {
-    cb(null, 'sample_game_db.sqlite'); 
+    cb(null, 'sample_game_db.sqlite'); // tên cố định → ghi đè mỗi lần upload
   }
 });
 
@@ -730,7 +604,7 @@ app.post('/upload-sqlite', upload1.single('sqlite_file'), (req, res) => {
   }
 
   console.log('Đã ghi đè file:', req.file.path);
-  res.status(200).send('Upload thành công (Lưu ý: Server hiện đang chạy Postgres, file này sẽ không tác dụng)');
+  res.status(200).send('Upload thành công');
 });
 
 // 📤 API download file mẫu
@@ -746,17 +620,12 @@ app.get('/template-sqlite.db', (req, res, next) => {
 function getGameByIdAsync(gameId) {
 
   return new Promise((resolve, reject) => {
-    // Postgres dùng $1
-    db.query("SELECT * from games WHERE id = $1", [gameId], (err, resDb) => {
+    db.get("SELECT * from games WHERE id = ?", [gameId], (err, row) => {
       if (err) return reject(err);
-      if (!resDb.rows[0]) return resolve(null);
+      if (!row) return resolve(null);
 
-      const row = resDb.rows[0];
-      console.log(JSON.stringify(row));
-      
       const eventObject = {
-        ...row,
-        tagId: row.tagId, // Cẩn thận case-sensitive: DB Postgres thường trả về lowercase cột (tagid)
+        tagId: row.tagId,
       };
 
       resolve(eventObject);
@@ -771,9 +640,10 @@ app.post('/search-gallery', async (req, res) => {
           res.status(500).json({ error: 'Tim theo game truoc' });
           return;
       };
-    const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
+    const cookies = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
+    const csrfToken = fs.existsSync('csrfToken.txt') ? fs.readFileSync('csrfToken.txt', 'utf8') : '';
 
-    if (datas.length === 0) {
+    if (cookies.length === 0 || !csrfToken) {
             res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
       return;
     }
@@ -783,15 +653,14 @@ app.post('/search-gallery', async (req, res) => {
     const game = await getGameByIdAsync(gameId);
 
     if (game) {
-      // Lưu ý: Postgres thường trả về tên cột thường. Hãy check DB nếu cột là tagId hay tagid
-      tagId = game.tagId || game.tagid; 
+      tagId = game.tagId;
     }
 
     const obj = JSON.parse('{"category": [], "page": 0, "sort": ["publish_date", "desc"], "tag26": ["136034"], "tag_group_data": 1, "matrix_app_features": 0, "date_range": "", "limit": 0, "init": 0, "tag37": [], "tag38": [], "tag34": [], "tag28": [], "tag18": [], "tag29": [], "tag36": [], "tag45": [], "tag9": [], "tag42": [], "tag32": [], "tag4": [], "tag1": [], "tag2": [], "tag3": [], "tag10": [], "tag12": [], "tag7": [], "tag8": [], "tag11": [], "tag43": [], "tag13": [], "tag22": [], "tag21": [], "search": ""}');
     obj.tag18 = [tagId.toString()];
     let form = new FormData();
 
-        form.append('csrf', datas.csrf);
+        form.append('csrf', csrfToken);
 
     form.append('cnd_config_dir', "/cms/blog/gallery");
     form.append('config_case', "gallery");
@@ -806,7 +675,7 @@ app.post('/search-gallery', async (req, res) => {
 
     let response = await axios.post('https://my.liquidandgrit.com/action/public/cms/blog/cnd', form, {
       headers: {
-        Cookie: datas.cookies,
+        Cookie: cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; '),
         "Content-Type": "text/html; charset=UTF-8", 
       },
       responseType: "text"
@@ -860,9 +729,10 @@ const { galleryName , gameId} = req.body;
           res.status(500).json({ error: 'Nhập input truoc' });
           return;
       };
-    const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
+    const cookies = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
+    const csrfToken = fs.existsSync('csrfToken.txt') ? fs.readFileSync('csrfToken.txt', 'utf8') : '';
 
-    if (datas.length === 0 ) {
+    if (cookies.length === 0 || !csrfToken) {
       res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
       return;
     }
@@ -872,7 +742,7 @@ const { galleryName , gameId} = req.body;
     const game = await getGameByIdAsync(gameId);
 
     if (game) {
-      tagId = game.tagId || game.tagid;
+      tagId = game.tagId;
     }
 
     const obj = JSON.parse('{"limit": 10, "init": 0, "page": 0, "type": [], "status": [], "category": [], "non_category": [], "tag37": [], "tag38": [], "tag28": [], "tag34": [], "tag18": ["768367"], "tag35": [], "tag21": [], "tag29": [], "tag36": [], "tag22": [], "tag26": [], "tag45": [], "tag42": [], "tag9": [], "tag32": [], "tag4": [], "tag1": [], "tag2": [], "tag3": [], "tag10": [], "tag12": [], "tag7": [], "tag8": [], "tag11": [], "tag43": [], "tag13": [], "search": ""}');
@@ -880,7 +750,7 @@ const { galleryName , gameId} = req.body;
     obj.search = galleryName;
 
     let form = new FormData();
-    form.append('csrf', datas.csrf);
+    form.append('csrf', csrfToken);
     form.append('id', '1');
     form.append('vo-action', '');
     form.append('filter_conditions', JSON.stringify(obj))
@@ -891,7 +761,7 @@ const { galleryName , gameId} = req.body;
 
     let response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/post-cnd', form, {
       headers: {
-        Cookie: datas.cookies,
+        Cookie: cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; '),
         "Content-Type": "text/html; charset=UTF-8", 
       },
       // responseType: "text"
