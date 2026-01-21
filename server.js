@@ -788,6 +788,7 @@ app.post('/check_item', async (req, res) => {
       let cnt = 0
       if (!data || !data?.startDateObj || !data?.eventName) {
         console.log('skip item:', item);
+        cnt = 1;
 
       } else {
         rows.each((i, row) => {
@@ -806,7 +807,7 @@ app.post('/check_item', async (req, res) => {
           }
         });
 
-        const result = await fetchGalleryInfo(`${galleryName} - ${game.app_name}`, gameId);
+        const result = await fetchGalleryInfo(`${data.eventName} - ${game.app_name}`, gameId);
         if(result.length > 0) {
           ret.url = result.permalink ;
           ret.editLink = `https://my.liquidandgrit.com/admin/cms/blog/?page=8&gallery-edit-instance=${result.id}` ;
