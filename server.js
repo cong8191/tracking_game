@@ -407,9 +407,9 @@ app.post('/createNewGallery', async (req, res) => {
     form.append('id', data.gallery_id);
     form.append('post[cms_page_blog_id]', '1');
     form.append('publish_date', publicDate);
-    form.append('post[publish][month]', dayjs(publicDate).getMonth() + 1);
+    form.append('post[publish][month]', dayjs(publicDate).month() + 1);
     form.append('post[publish][day]', dayjs(publicDate).date());
-    form.append('post[publish][year]', dayjs(publicDate).getFullYear());
+    form.append('post[publish][year]', dayjs(publicDate).year());
     form.append('post[publish][hour]', currentDate.format('h'));
     form.append('post[publish][minute]', currentDate.format('mm'));
     form.append('post[publish][meridian]', currentDate.format('A'));
