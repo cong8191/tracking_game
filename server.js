@@ -496,17 +496,18 @@ app.post('/event', (req, res) => {
 
 
 app.post('/action', async (req, res) => {
-  const { id, event_id, date, from, to, type } = req.body;
+  const { id, event_id, date, from, to, type, gameId } = req.body;
 
   let str = '';
 
+  if (!event_id || !date) {
+        return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  const event = await getEventByIdAsync(event_id);
+
   try {
     if (type != 'nochanged') {
-      if (!event_id || !date) {
-        return res.status(400).json({ error: 'Missing required fields' });
-      }
-
-      const event = await getEventByIdAsync(event_id);
 
       if (!event) {
         return res.status(400).json({ error: 'không tìm thấy event' });
