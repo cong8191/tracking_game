@@ -12,7 +12,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 // --- KẾT NỐI POSTGRES ---
 // Thay Client bằng Pool
-const { Pool } = require('pg'); 
+const { Pool } = require('pg');
 
 // Thay new Client bằng new Pool
 const db = new Pool({
@@ -69,7 +69,7 @@ app.get('/readDataCookies', async (req, res) => {
   try {
     const dataStr = fs.existsSync('cookies.json') ? fs.readFileSync('cookies.json', 'utf-8') : '';
     let form = new FormData();
-    
+
     const datas = dataStr != '' ? JSON.parse(dataStr) : {};
 
     if (datas.length === 0) {
@@ -83,14 +83,14 @@ app.get('/readDataCookies', async (req, res) => {
     let response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/manage', form, {
       headers: {
         Cookie: datas.cookies,
-        "Content-Type": "text/html; charset=UTF-8", 
+        "Content-Type": "text/html; charset=UTF-8",
       },
       responseType: "text"
     });
 
     const data = JSON.parse(response.data);
 
-    if(!data.blogData) {
+    if (!data.blogData) {
       res.json({ success: true, result: '' });
       return;
     }
@@ -166,7 +166,7 @@ app.get('/games', (req, res) => {
             name: row.event_name,
             gallery_id: row.gallery_id,
             default_day: row.default_day,
-            g_name:  row.g_name,
+            g_name: row.g_name,
             post_slug: row.post_slug || ''
           });
         }
@@ -207,23 +207,23 @@ app.post('/getInfo', async (req, res) => {
       return;
     }
 
-    
+
 
     let form = new FormData();
-    
+
     form.append('csrf', datas.csrf);
     form.append('id', event_id);
 
     let response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', form, {
       headers: {
         Cookie: datas.cookies,
-        "Content-Type": "text/html; charset=UTF-8", 
+        "Content-Type": "text/html; charset=UTF-8",
       },
       responseType: "text"
     });
 
     data = JSON.parse(response.data);
- 
+
 
     res.json({ success: true, result: data });
 
@@ -268,7 +268,7 @@ app.post('/upload', upload2.single('file'), async (req, res) => {
     );
 
     // Xóa file tạm sau khi gửi xong
-    fs.unlink(req.file.path, () => {});
+    fs.unlink(req.file.path, () => { });
 
     res.json({ success: true, result: 'OK' });
   } catch (err) {
@@ -349,9 +349,9 @@ app.post('/createNewGallery', async (req, res) => {
       res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
       return;
     }
-  
+
     let form = new FormData();
-    
+
     form.append('csrf', datas.csrf);
     form.append('post[name]', `${galleryName} - ${game.app_name}`);
     form.append('blog_id', '1');
@@ -362,7 +362,7 @@ app.post('/createNewGallery', async (req, res) => {
     let response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', form, {
       headers: {
         Cookie: datas.cookies,
-        "Content-Type": "text/html; charset=UTF-8", 
+        "Content-Type": "text/html; charset=UTF-8",
       },
       responseType: "text"
     });
@@ -392,7 +392,7 @@ app.post('/createNewGallery', async (req, res) => {
     response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', form, {
       headers: {
         Cookie: datas.cookies,
-        "Content-Type": "text/html; charset=UTF-8", 
+        "Content-Type": "text/html; charset=UTF-8",
       },
       responseType: "text"
     });
@@ -417,26 +417,26 @@ app.post('/createNewGallery', async (req, res) => {
     response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', form, {
       headers: {
         Cookie: datas.cookies,
-        "Content-Type": "text/html; charset=UTF-8", 
+        "Content-Type": "text/html; charset=UTF-8",
       },
       responseType: "text"
     });
 
     res.json({
-        success: true,
-        result: {
-          gallery_id: data.gallery_id,
-          post_slug: data.post_slug
-        }
-      });
+      success: true,
+      result: {
+        gallery_id: data.gallery_id,
+        post_slug: data.post_slug
+      }
+    });
     // data.gallery_id
     // data.post_slug
 
   } catch (err) {
-      console.error("❌ lỗi tạo gallery:", err.message);
-      res.status(500).json({ error: err.message });
-      return;
-    }
+    console.error("❌ lỗi tạo gallery:", err.message);
+    res.status(500).json({ error: err.message });
+    return;
+  }
 
 });
 
@@ -447,7 +447,7 @@ app.post('/event', (req, res) => {
     return res.status(400).json({ error: 'Thiếu dữ liệu: name, gallery_id là bắt buộc.' });
   }
 
- if (eventId) {
+  if (eventId) {
     // Trường hợp UPDATE
     // Thay ? bằng $1, $2...
     const updateSql = `
@@ -498,28 +498,25 @@ app.post('/event', (req, res) => {
 app.post('/action', async (req, res) => {
   const { id, event_id, date, from, to, type } = req.body;
 
-  // console.log(dayjs(to).format("MMMM D, YYYY"));
-  
-
-  // return res.status(400).json({ error: 'Missing required fields' });
-
-  if (!event_id || !date) {
-    return res.status(400).json({ error: 'Missing required fields' });
-  }
-
-  const event = await getEventByIdAsync(event_id);
-
-  if (!event) {
-    return res.status(400).json({ error: 'không tìm thấy event' });
-  }
+  let str = '';
 
   try {
-    if(type != 'nochanged') {
+    if (type != 'nochanged') {
+      if (!event_id || !date) {
+        return res.status(400).json({ error: 'Missing required fields' });
+      }
+
+      const event = await getEventByIdAsync(event_id);
+
+      if (!event) {
+        return res.status(400).json({ error: 'không tìm thấy event' });
+      }
+
       const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
       console.log(datas);
-      
+
       if (datas.length === 0) {
-              res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
+        res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
         return;
       }
 
@@ -531,21 +528,21 @@ app.post('/action', async (req, res) => {
       form.append('cms_page_blog_gallery_id', event.gallery_id);
 
 
-      
+
 
       console.log("bat dau goi");
 
       let response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/plugin', form, {
         headers: {
           Cookie: datas.cookies,
-          "Content-Type": "text/html; charset=UTF-8", 
+          "Content-Type": "text/html; charset=UTF-8",
         },
         responseType: "text"
       });
 
       let data = JSON.parse(response.data);
-      
-      
+
+
       form = new FormData();
       form.append('csrf', datas.csrf);
 
@@ -560,7 +557,7 @@ app.post('/action', async (req, res) => {
       response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/plugin', form, {
         headers: {
           Cookie: datas.cookies,
-          "Content-Type": "text/html; charset=UTF-8", 
+          "Content-Type": "text/html; charset=UTF-8",
         },
         responseType: "text"
       });
@@ -568,33 +565,27 @@ app.post('/action', async (req, res) => {
       data = JSON.parse(response.data);
 
       console.log(data);
-      
 
-    }
- 
-    // return res.status(400).json({ error: 'dung xu ly' });
+      let strDate = ''
+      if (dayjs(from).month() === dayjs(to).month()) {
+        strDate = `${dayjs(from).date()}-${dayjs(to).date()}`;
+      } else {
+        strDate = `${dayjs(from).date()}-${dayjs(to).month() + 1}/${dayjs(to).date()}`;
+      }
 
-    let strDate = ''
-     if (dayjs(from).month() === dayjs(to).month()) {
-    strDate = `${dayjs(from).date()}-${dayjs(to).date()}`;
-    } else {
-      strDate = `${dayjs(from).date()}-${dayjs(to).month() + 1}/${dayjs(to).date()}`;
-    }
-    let str = '';
-    if(type == 'nochanged') {
-      str = 'No Change';
-    } else {
       const extra = type == 'image' ? `/ image ` : (type == 'video' ? '/ image/ video ' : '');
-        str = (event.g_name || '') != '' ? `-Added tracker date ${extra}for ${event.g_name} ( ${event.name} ) (${strDate})` : `-Added tracker date ${extra}for ${event.name} (${strDate})`
+      str = (event.g_name || '') != '' ? `-Added tracker date ${extra}for ${event.g_name} ( ${event.name} ) (${strDate})` : `-Added tracker date ${extra}for ${event.name} (${strDate})`
+
+
+    } else {
+      str = 'No Change';
     }
-     
-    // console.log( event.game_name);
-    
+
     const params = {
       date: dayjs(date).format("DD/MM/YYYY"),
       name: event.game_name,
       events: [str]
-    } 
+    }
 
     response = await axios.post(GOOGLE_SCRIPT_URL, params, {
       headers: { "Content-Type": "application/json" }
@@ -661,40 +652,40 @@ app.post('/actions', async (req, res) => {
     await client.query("BEGIN"); // BEGIN TRANSACTION
 
     const results = [];
-    
+
     // Duyệt qua từng record
     for (const record of records) {
-        const { id, event_id, date, from, to, status, isDelete, type } = record;
+      const { id, event_id, date, from, to, status, isDelete, type } = record;
 
-        if (id) {
-            // Check status
-            const resCheck = await client.query(`SELECT status FROM action WHERE id = $1`, [id]);
-            const row = resCheck.rows[0];
+      if (id) {
+        // Check status
+        const resCheck = await client.query(`SELECT status FROM action WHERE id = $1`, [id]);
+        const row = resCheck.rows[0];
 
-            if (row?.status === '1') {
-                results.push({ id, status: '1', message: 'Already success. Skipped.' });
-                continue; // Bỏ qua vòng lặp này
-            }
-
-            if(isDelete) {
-                await client.query(`DELETE FROM action WHERE id = $1`, [id]);
-                results.push({ id, status: status || '0' });
-            } else {
-                // Update
-                await client.query(
-                    `UPDATE action SET eventid = $1, date = $2, "from" = $3, "to" = $4, status = $5, type=$6 WHERE id = $7`,
-                    [event_id, date, from || '', to || '', status || '0', type, id]
-                );
-                results.push({ id, status: status || '0' });
-            }
-        } else {
-            // INSERT
-            const resInsert = await client.query(
-                `INSERT INTO action (eventid, date, status, "from", "to", type) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-                [event_id, date, status || '0', from || '', to || '', type]
-            );
-            results.push({ id: resInsert.rows[0].id, status: status || '0' });
+        if (row?.status === '1') {
+          results.push({ id, status: '1', message: 'Already success. Skipped.' });
+          continue; // Bỏ qua vòng lặp này
         }
+
+        if (isDelete) {
+          await client.query(`DELETE FROM action WHERE id = $1`, [id]);
+          results.push({ id, status: status || '0' });
+        } else {
+          // Update
+          await client.query(
+            `UPDATE action SET eventid = $1, date = $2, "from" = $3, "to" = $4, status = $5, type=$6 WHERE id = $7`,
+            [event_id, date, from || '', to || '', status || '0', type, id]
+          );
+          results.push({ id, status: status || '0' });
+        }
+      } else {
+        // INSERT
+        const resInsert = await client.query(
+          `INSERT INTO action (eventid, date, status, "from", "to", type) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+          [event_id, date, status || '0', from || '', to || '', type]
+        );
+        results.push({ id: resInsert.rows[0].id, status: status || '0' });
+      }
     }
 
     await client.query("COMMIT"); // Commit nếu mọi thứ ok
@@ -710,39 +701,6 @@ app.post('/actions', async (req, res) => {
 });
 
 
-// PHẦN UPLOAD SQLITE CŨ - GIỮ NGUYÊN NHƯNG KHÔNG DÙNG ĐƯỢC CHO POSTGRES
-// Bạn có thể xóa đi nếu muốn
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, path.resolve(__dirname)); 
-  },
-  filename: (req, file, cb) => {
-    cb(null, 'sample_game_db.sqlite'); 
-  }
-});
-
-const upload1 = multer({ storage });
-
-// 📥 API upload
-app.post('/upload-sqlite', upload1.single('sqlite_file'), (req, res) => {
-  if (!req.file) {
-    return res.status(400).send('No file uploaded');
-  }
-
-  console.log('Đã ghi đè file:', req.file.path);
-  res.status(200).send('Upload thành công (Lưu ý: Server hiện đang chạy Postgres, file này sẽ không tác dụng)');
-});
-
-// 📤 API download file mẫu
-app.get('/template-sqlite.db', (req, res, next) => {
-  const filePath = path.resolve(__dirname, 'sample_game_db.sqlite');
-  res.download(filePath, 'template-sqlite.db', (err) => {
-    if (err && err.code === 'ENOENT') return res.status(404).send('Không tìm thấy file mẫu');
-    if (err) return next(err);
-  });
-});
-
-
 function getGameByIdAsync(gameId) {
 
   return new Promise((resolve, reject) => {
@@ -753,7 +711,7 @@ function getGameByIdAsync(gameId) {
 
       const row = resDb.rows[0];
       console.log(JSON.stringify(row));
-      
+
       const eventObject = {
         ...row,
         tagId: row.tagId, // Cẩn thận case-sensitive: DB Postgres thường trả về lowercase cột (tagid)
@@ -764,17 +722,18 @@ function getGameByIdAsync(gameId) {
   });
 }
 
-app.post('/search-gallery', async (req, res) => {
-  const { search_keyword, gameId } = req.body;
+app.post('/check_item', async (req, res) => {
+  const { checkData, gameId } = req.body;
   try {
-      if(!gameId) {
-          res.status(500).json({ error: 'Tim theo game truoc' });
-          return;
-      };
     const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
 
     if (datas.length === 0) {
-            res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
+      res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
+      return;
+    }
+
+    if (checkData && checkData.length === 0) {
+      res.status(500).json({ error: 'No check data found.' });
       return;
     }
 
@@ -784,30 +743,137 @@ app.post('/search-gallery', async (req, res) => {
 
     if (game) {
       // Lưu ý: Postgres thường trả về tên cột thường. Hãy check DB nếu cột là tagId hay tagid
-      tagId = game.tagId || game.tagid; 
+      tagId = game.tagId || game.tagid;
+    }
+
+    // tagId = '1552'
+    const currentDate = dayjs();
+    const prevDate = currentDate.subtract(30, 'day')
+
+    const obj = JSON.parse('{"date_range": ["2025-12-23", "2026-01-21"], "search": "", "view": ["activity"], "tag26": ["136034"], "limit": 40, "tag18": ["684110"], "init": 0, "page": 0, "category2": [], "tag37": [], "tag38": [], "tag28": []}');
+    obj.date_range = [prevDate.format('YYYY-MM-DD'), currentDate.format('YYYY-MM-DD')];
+    obj.tag18 = [tagId.toString()];
+    let form = new FormData();
+
+    form.append('csrf', datas.csrf);
+    form.append('plugin', 'event');
+    form.append('action', 'searchItem');
+    form.append('vo-action', '');
+    form.append('filter_conditions', JSON.stringify(obj))
+
+    console.log(form);
+
+    let response = await axios.post('https://my.liquidandgrit.com/action/public/cms/plugin', form, {
+      headers: {
+        Cookie: datas.cookies,
+        "Content-Type": "text/html; charset=UTF-8",
+      },
+      responseType: "text"
+    });
+
+    let data = JSON.parse(response.data);
+    // console.log(data);
+
+    const $ = cheerio.load(data.content_html);
+    const rows = $('table.table-cnd tbody tr');
+
+    const resultData = [];
+    checkData.forEach(async item => {
+      const data = parseTrackerItem(item);
+
+      const ret = {
+        name: item,
+      };
+
+      let cnt = 0
+      if (!data || !data?.startDateObj || !data?.eventName) {
+        console.log('skip item:', item);
+
+      } else {
+        rows.each((i, row) => {
+          //console.log(i);
+          
+          const cells = $(row).find('td');
+
+          if($(cells[0]).text() == data.startDateObj.format('MMMM D, YYYY')
+            && $(cells[1]).text() == data.endDateObj.format('MMMM D, YYYY')
+            && $(cells[4]).text().toLowerCase().includes(data.eventName.toLowerCase())
+            && $(cells[5]).text().toLowerCase().includes((data.subEvent || '').toLowerCase())
+          ) {
+            cnt++;
+          } else if (cnt > 1) {
+            return false; // break loop
+          }
+        });
+
+        const result = await fetchGalleryInfo(`${galleryName} - ${game.app_name}`, gameId);
+        if(result.length > 0) {
+          ret.url = result.permalink ;
+          ret.editLink = `https://my.liquidandgrit.com/admin/cms/blog/?page=8&gallery-edit-instance=${result.id}` ;
+        }
+      }
+
+      ret.cnt = cnt;
+      ret.valid = cnt == 1;
+      resultData.push(ret);
+    });
+
+    console.log(resultData);
+    res.json({
+      success: true,
+      resultData
+    });
+    // res.json(Object.values(matchedRows));
+
+  } catch (err) {
+    console.error("❌ Error ", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+app.post('/search-gallery', async (req, res) => {
+  const { search_keyword, gameId } = req.body;
+  try {
+    if (!gameId) {
+      res.status(500).json({ error: 'Tim theo game truoc' });
+      return;
+    };
+    const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
+
+    if (datas.length === 0) {
+      res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
+      return;
+    }
+
+    let tagId = ''
+
+    const game = await getGameByIdAsync(gameId);
+
+    if (game) {
+      // Lưu ý: Postgres thường trả về tên cột thường. Hãy check DB nếu cột là tagId hay tagid
+      tagId = game.tagId || game.tagid;
     }
 
     const obj = JSON.parse('{"category": [], "page": 0, "sort": ["publish_date", "desc"], "tag26": ["136034"], "tag_group_data": 1, "matrix_app_features": 0, "date_range": "", "limit": 0, "init": 0, "tag37": [], "tag38": [], "tag34": [], "tag28": [], "tag18": [], "tag29": [], "tag36": [], "tag45": [], "tag9": [], "tag42": [], "tag32": [], "tag4": [], "tag1": [], "tag2": [], "tag3": [], "tag10": [], "tag12": [], "tag7": [], "tag8": [], "tag11": [], "tag43": [], "tag13": [], "tag22": [], "tag21": [], "search": ""}');
     obj.tag18 = [tagId.toString()];
     let form = new FormData();
 
-        form.append('csrf', datas.csrf);
+    form.append('csrf', datas.csrf);
 
     form.append('cnd_config_dir', "/cms/blog/gallery");
     form.append('config_case', "gallery");
     form.append('id', '1');
     form.append('vo-action', '');
     form.append('filter_conditions', JSON.stringify(obj))
-    
+
     console.log(form);
-    
+
 
     console.log("bat dau goi");
 
     let response = await axios.post('https://my.liquidandgrit.com/action/public/cms/blog/cnd', form, {
       headers: {
         Cookie: datas.cookies,
-        "Content-Type": "text/html; charset=UTF-8", 
+        "Content-Type": "text/html; charset=UTF-8",
       },
       responseType: "text"
     });
@@ -823,23 +889,23 @@ app.post('/search-gallery', async (req, res) => {
     rows.each((i, row) => {
       const link = $(row).find('td a.vo-permalink-url');
       const cells = $(row).find('td');
-      
+
       // console.log(link.attr('data-info'));
 
       // console.log(link.attr('href'));
 
       if (
-  (search_keyword || '') === '' ||
-  $(cells[0]).text().toLowerCase().includes(search_keyword.toLowerCase()) ||
-  $(cells[2]).text().toLowerCase().includes(search_keyword.toLowerCase())
-) {
-            matchedRows.push({
-              title: $(cells[0]).text(),
-              href: link.attr('href'),
-              sub: $(cells[2]).text(),
-            })
+        (search_keyword || '') === '' ||
+        $(cells[0]).text().toLowerCase().includes(search_keyword.toLowerCase()) ||
+        $(cells[2]).text().toLowerCase().includes(search_keyword.toLowerCase())
+      ) {
+        matchedRows.push({
+          title: $(cells[0]).text(),
+          href: link.attr('href'),
+          sub: $(cells[2]).text(),
+        })
       }
-      
+
       // console.log($(cells[0]).text(), $(cells[2]).text());
     });
 
@@ -854,15 +920,29 @@ app.post('/search-gallery', async (req, res) => {
 });
 
 app.post('/get-gallery-info', async (req, res) => {
-const { galleryName , gameId} = req.body;
+  const { galleryName, gameId } = req.body;
   try {
-      if(!galleryName || !gameId) {
-          res.status(500).json({ error: 'Nhập input truoc' });
-          return;
-      };
-    const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
+    if (!galleryName || !gameId) {
+      res.status(500).json({ error: 'Nhập input truoc' });
+      return;
+    };
+    
+    const result = await fetchGalleryInfo(galleryName, gameId);
 
-    if (datas.length === 0 ) {
+    res.json(result);
+
+  } catch (err) {
+    console.error("❌ Error ", err.message);
+    res.status(500).json({ error: err.message });
+    return;
+  }
+
+});
+
+const fetchGalleryInfo = async (galleryName, gameId) => {
+  const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
+
+    if (datas.length === 0) {
       res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
       return;
     }
@@ -885,14 +965,14 @@ const { galleryName , gameId} = req.body;
     form.append('vo-action', '');
     form.append('filter_conditions', JSON.stringify(obj))
 
-      
+
 
     console.log("bat dau goi");
 
     let response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/post-cnd', form, {
       headers: {
         Cookie: datas.cookies,
-        "Content-Type": "text/html; charset=UTF-8", 
+        "Content-Type": "text/html; charset=UTF-8",
       },
       // responseType: "text"
     });
@@ -900,18 +980,138 @@ const { galleryName , gameId} = req.body;
     // let data = JSON.parse(response.data);
     // console.log(response.data);
 
-    console.log(response.data.content);
+    const contentList = response.data && response.data.content ? response.data.content : [];
+
+    const foundItem = contentList.find(item => item.name.toLowerCase() == galleryName.toLowerCase());
+  
+    return foundItem || {};
+
     
-    res.json(response.data.content.find(item=> item.name == galleryName) || {});
+}
 
-
-  } catch (err) {
-    console.error("❌ Error ", err.message);
-    res.status(500).json({ error: err.message });
-    return;
+const calculateDateRange = (dateRangeStr) => {
+  // 1. CHECK AN TOÀN: Nếu không có chuỗi hoặc không phải string -> Trả về null ngay
+  if (!dateRangeStr || typeof dateRangeStr !== 'string' || !dateRangeStr.trim()) {
+    return null; // Hoặc return { startDate: null, endDate: null } tùy logic của bạn
   }
 
-});
+  const currentDay = dayjs().date();
+  const currentYear = dayjs().year();
+  const currentMonth = dayjs().month() + 1; // 1-12
+
+ const parts = dateRangeStr.split('-').map(str => str.trim());
+
+  if (parts.length === 1) {
+    // Trường hợp: "(16)" -> Start = 16, End = 16
+    startStr = parts[0];
+    endStr = parts[0];
+  } else if (parts.length === 2) {
+    // Trường hợp: "(19 - 24)"
+    startStr = parts[0];
+    endStr = parts[1];
+  } else {
+    // Trường hợp rỗng hoặc sai format
+    return { startDate: null, endDate: null };
+  }
+
+  // -- XỬ LÝ END DATE --
+  let endDay, endMonth, endYear = currentYear;
+
+  if (endStr.includes('/')) {
+    const splitEnd = endStr.split('/');
+    endDay = parseInt(splitEnd[1]);
+    endMonth = parseInt(splitEnd[0]);
+  } else {
+    endDay = parseInt(endStr);
+    endMonth = currentMonth;
+  }
+
+  // -- XỬ LÝ START DATE --
+  let startDay, startMonth = currentMonth, startYear = currentYear;
+
+  if (startStr.includes('/')) {
+    const splitStart = startStr.split('/');
+    startDay = parseInt(splitStart[1]);
+    startMonth = parseInt(splitStart[0]);
+  } else {
+    startDay = parseInt(startStr);
+    // Logic: Nếu ngày bắt đầu > ngày kết thúc -> lùi 1 tháng
+    if (startDay > currentDay) {
+      startMonth = currentMonth - 1;
+      if (startMonth === 0) {
+        startMonth = 12;
+        startYear -= 1;
+      }
+    } else {
+      startMonth = currentMonth;
+    }
+  }
+
+  // -- XỬ LÝ GIAO THỪA (29/12 - 1/1) --
+  if (startMonth === 12 && endMonth === 1) {
+    endYear = startYear + 1;
+  }
+
+  return {
+    startDate: dayjs(`${startYear}-${startMonth}-${startDay}`, 'YYYY-M-D'),
+    endDate: dayjs(`${endYear}-${endMonth}-${endDay}`, 'YYYY-M-D')
+  };
+};
+
+/**
+ * Hàm Chính: Parse log item
+ */
+const parseTrackerItem = (logString) => {
+  if (!logString || typeof logString !== 'string') return null;
+
+  // 1. Tách Link URL
+  const parts = logString.split('|');
+  let contentPart = parts[0].trim();
+  let urlPart = parts[1] ? parts[1].trim() : null;
+
+  // 2. Tìm điểm bắt đầu
+  const prefixMatch = contentPart.match(/(?:for|gallery)\s+/);
+  if (!prefixMatch) return null;
+
+  let mainString = contentPart.substring(prefixMatch.index + prefixMatch[0].length).trim();
+
+  // 3. Cắt Date (Ngoặc cuối cùng)
+  const dateRegex = /\(([^)]+)\)$/;
+  const dateMatch = mainString.match(dateRegex);
+
+  if (!dateMatch) return null;
+
+  const rawDate = dateMatch[1].trim(); // Có thể là "16" hoặc "19 - 24"
+  let remaining = mainString.substring(0, dateMatch.index).trim();
+
+  // 4. Check SubEvent
+  const subEventRegex = /\(([^)]+)\)$/;
+  const subMatch = remaining.match(subEventRegex);
+
+  let eventName = "";
+  let subEvent = "";
+
+  if (subMatch) {
+    subEvent = subMatch[1].trim();
+    eventName = remaining.substring(0, subMatch.index).trim();
+  } else {
+    eventName = remaining;
+    subEvent = "";
+  }
+
+  // 5. Tính toán ngày
+  const dates = calculateDateRange(rawDate);
+
+  return {
+    eventName,
+    subEvent,
+    url: urlPart,
+    originalDate: rawDate,
+    // Format hiển thị
+    startDateObj: dates.startDate,
+    endDateObj: dates.endDate
+  };
+};
 
 // Serve static files from React build folder
 app.use(express.static(path.join(__dirname, 'build')));
