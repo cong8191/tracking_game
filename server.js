@@ -807,6 +807,8 @@ app.post('/check_item', async (req, res) => {
           }
         });
 
+        console.log(`${data.eventName} - ${game.app_name}`);
+        
         const result = await fetchGalleryInfo(`${data.eventName} - ${game.app_name}`, gameId);
         if(result.length > 0) {
           ret.url = result.permalink ;
@@ -979,7 +981,7 @@ const fetchGalleryInfo = async (galleryName, gameId) => {
     });
 
     // let data = JSON.parse(response.data);
-    // console.log(response.data);
+    console.log(response.data);
 
     const contentList = response.data && response.data.content ? response.data.content : [];
 
