@@ -807,10 +807,10 @@ app.post('/check_item', async (req, res) => {
           }
         });
 
-        console.log(`${data.eventName} - ${game.app_name}`);
+        // console.log(`${data.eventName} - ${game.app_name}`);
         
         const result = await fetchGalleryInfo(`${data.eventName} - ${game.app_name}`, gameId);
-        if(result.length > 0) {
+        if(result?.id) {
           ret.url = result.permalink ;
           ret.editLink = `https://my.liquidandgrit.com/admin/cms/blog/?page=8&gallery-edit-instance=${result.id}` ;
         }
@@ -981,7 +981,7 @@ const fetchGalleryInfo = async (galleryName, gameId) => {
     });
 
     // let data = JSON.parse(response.data);
-    console.log(response.data);
+    // console.log(response.data);
 
     const contentList = response.data && response.data.content ? response.data.content : [];
 
