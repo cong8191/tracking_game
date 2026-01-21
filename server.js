@@ -455,7 +455,7 @@ app.post('/event', (req, res) => {
       SET name = $1, gallery_id = $2, g_name = $3, gameid = $4, default_day = $5, post_slug = $7
       WHERE id = $6
     `;
-    db.query(updateSql, [name, gallery_id, g_name, gameId, default_day, eventId, post_slug], function (err) {
+    db.query(updateSql, [name, gallery_id, g_name, gameId, default_day == '' ? null : default_day, eventId, post_slug], function (err) {
       if (err) {
         console.error('❌ Update error:', err);
         return res.status(500).json({ error: 'Lỗi khi cập nhật sự kiện.' });
@@ -476,7 +476,7 @@ app.post('/event', (req, res) => {
       INSERT INTO event (gameid, name, gallery_id, default_day, g_name, post_slug)
       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
     `;
-    db.query(insertSql, [gameId, name, gallery_id, default_day, g_name, post_slug], function (err, resDb) {
+    db.query(insertSql, [gameId, name, gallery_id, default_day == '' ? null : default_day, g_name, post_slug], function (err, resDb) {
       if (err) {
         console.error('❌ Insert error:', err);
         return res.status(500).json({ error: 'Lỗi khi thêm sự kiện.' });
@@ -568,7 +568,9 @@ app.post('/action', async (req, res) => {
       console.log(data);
 
       let strDate = ''
-      if (dayjs(from).month() === dayjs(to).month()) {
+      if(from == to) {
+        strDate = `${dayjs(from).date()}`;
+      } else if (dayjs(from).month() === dayjs(to).month()) {
         strDate = `${dayjs(from).date()}-${dayjs(to).date()}`;
       } else {
         strDate = `${dayjs(from).date()}-${dayjs(to).month() + 1}/${dayjs(to).date()}`;
@@ -751,9 +753,10 @@ app.post('/check_item', async (req, res) => {
     const currentDate = dayjs();
     const prevDate = currentDate.subtract(30, 'day')
 
-    const obj = JSON.parse('{"date_range": ["2025-12-23", "2026-01-21"], "search": "", "view": ["activity"], "tag26": ["136034"], "limit": 40, "tag18": ["684110"], "init": 0, "page": 0, "category2": [], "tag37": [], "tag38": [], "tag28": []}');
+    const obj = JSON.parse('{"date_range": ["2025-12-23", "2026-01-21"], "search": "", "view": ["activity"], "tag26": ["136034"], "limit": 4000, "tag18": ["684110"], "init": 0, "page": 0, "category2": [], "tag37": [], "tag38": [], "tag28": []}');
     obj.date_range = [prevDate.format('YYYY-MM-DD'), currentDate.format('YYYY-MM-DD')];
     obj.tag18 = [tagId.toString()];
+    obj.limit = (Math.floor(Math.random() * (5000 - 100 + 1)) + 100).toString()
     let form = new FormData();
 
     form.append('csrf', datas.csrf);
@@ -781,6 +784,7 @@ app.post('/check_item', async (req, res) => {
     const resultData = [];
     for (let index = 0; index < checkData.length; index++) {
       const item = checkData[index];
+      if(item == '') continue;
 
       const data = parseTrackerItem(item);
 
