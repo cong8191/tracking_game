@@ -778,7 +778,9 @@ app.post('/check_item', async (req, res) => {
     const rows = $('table.table-cnd tbody tr');
 
     const resultData = [];
-    checkData.forEach(async item => {
+    for (let index = 0; index < checkData.length; index++) {
+      const item = checkData[index];
+
       const data = parseTrackerItem(item);
 
       const ret = {
@@ -787,19 +789,19 @@ app.post('/check_item', async (req, res) => {
 
       let cnt = 0
       if (!data || !data?.startDateObj || !data?.eventName) {
-        console.log('skip item:', item);
+        ret.url = data.url;
         cnt = 1;
 
       } else {
         rows.each((i, row) => {
           //console.log(i);
-          
+
           const cells = $(row).find('td');
 
-          if($(cells[0]).text() == data.startDateObj.format('MMMM D, YYYY')
-            && $(cells[1]).text() == data.endDateObj.format('MMMM D, YYYY')
-            && $(cells[4]).text().toLowerCase().includes(data.eventName.toLowerCase())
-            && $(cells[5]).text().toLowerCase().includes((data.subEvent || '').toLowerCase())
+          if ($(cells[0])?.text() == data.startDateObj.format('MMMM D, YYYY')
+            && $(cells[1])?.text() == data.endDateObj.format('MMMM D, YYYY')
+            && $(cells[4])?.text().toLowerCase().includes(data.eventName.toLowerCase())
+            && $(cells[5])?.text().toLowerCase().includes((data.subEvent || '').toLowerCase())
           ) {
             cnt++;
           } else if (cnt > 1) {
@@ -808,18 +810,18 @@ app.post('/check_item', async (req, res) => {
         });
 
         // console.log(`${data.eventName} - ${game.app_name}`);
-        
+
         const result = await fetchGalleryInfo(`${data.eventName} - ${game.app_name}`, gameId);
-        if(result?.id) {
-          ret.url = result.permalink ;
-          ret.editLink = `https://my.liquidandgrit.com/admin/cms/blog/?page=8&gallery-edit-instance=${result.id}` ;
+        if (result?.id) {
+          ret.url = result.permalink;
+          ret.editLink = `https://my.liquidandgrit.com/admin/cms/blog/?page=8&gallery-edit-instance=${result.id}`;
         }
       }
 
       ret.cnt = cnt;
       ret.valid = cnt == 1;
       resultData.push(ret);
-    });
+    };
 
     console.log(resultData);
     res.json({
@@ -929,7 +931,7 @@ app.post('/get-gallery-info', async (req, res) => {
       res.status(500).json({ error: 'Nhập input truoc' });
       return;
     };
-    
+
     const result = await fetchGalleryInfo(galleryName, gameId);
 
     res.json(result);
@@ -945,51 +947,51 @@ app.post('/get-gallery-info', async (req, res) => {
 const fetchGalleryInfo = async (galleryName, gameId) => {
   const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
 
-    if (datas.length === 0) {
-      res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
-      return;
-    }
+  if (datas.length === 0) {
+    res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
+    return;
+  }
 
-    let tagId = ''
+  let tagId = ''
 
-    const game = await getGameByIdAsync(gameId);
+  const game = await getGameByIdAsync(gameId);
 
-    if (game) {
-      tagId = game.tagId || game.tagid;
-    }
+  if (game) {
+    tagId = game.tagId || game.tagid;
+  }
 
-    const obj = JSON.parse('{"limit": 10, "init": 0, "page": 0, "type": [], "status": [], "category": [], "non_category": [], "tag37": [], "tag38": [], "tag28": [], "tag34": [], "tag18": ["768367"], "tag35": [], "tag21": [], "tag29": [], "tag36": [], "tag22": [], "tag26": [], "tag45": [], "tag42": [], "tag9": [], "tag32": [], "tag4": [], "tag1": [], "tag2": [], "tag3": [], "tag10": [], "tag12": [], "tag7": [], "tag8": [], "tag11": [], "tag43": [], "tag13": [], "search": ""}');
-    obj.tag18 = [tagId.toString()];
-    obj.search = galleryName;
+  const obj = JSON.parse('{"limit": 10, "init": 0, "page": 0, "type": [], "status": [], "category": [], "non_category": [], "tag37": [], "tag38": [], "tag28": [], "tag34": [], "tag18": ["768367"], "tag35": [], "tag21": [], "tag29": [], "tag36": [], "tag22": [], "tag26": [], "tag45": [], "tag42": [], "tag9": [], "tag32": [], "tag4": [], "tag1": [], "tag2": [], "tag3": [], "tag10": [], "tag12": [], "tag7": [], "tag8": [], "tag11": [], "tag43": [], "tag13": [], "search": ""}');
+  obj.tag18 = [tagId.toString()];
+  obj.search = galleryName;
 
-    let form = new FormData();
-    form.append('csrf', datas.csrf);
-    form.append('id', '1');
-    form.append('vo-action', '');
-    form.append('filter_conditions', JSON.stringify(obj))
+  let form = new FormData();
+  form.append('csrf', datas.csrf);
+  form.append('id', '1');
+  form.append('vo-action', '');
+  form.append('filter_conditions', JSON.stringify(obj))
 
 
 
-    console.log("bat dau goi");
+  console.log("bat dau goi");
 
-    let response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/post-cnd', form, {
-      headers: {
-        Cookie: datas.cookies,
-        "Content-Type": "text/html; charset=UTF-8",
-      },
-      // responseType: "text"
-    });
+  let response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/post-cnd', form, {
+    headers: {
+      Cookie: datas.cookies,
+      "Content-Type": "text/html; charset=UTF-8",
+    },
+    // responseType: "text"
+  });
 
-    // let data = JSON.parse(response.data);
-    // console.log(response.data);
+  // let data = JSON.parse(response.data);
+  // console.log(response.data);
 
-    const contentList = response.data && response.data.content ? response.data.content : [];
+  const contentList = response.data && response.data.content ? response.data.content : [];
 
-    const foundItem = contentList.find(item => item.name.toLowerCase() == galleryName.toLowerCase());
-  
-    return foundItem || {};
+  const foundItem = contentList.find(item => item.name.toLowerCase() == galleryName.toLowerCase());
 
-    
+  return foundItem || {};
+
+
 }
 
 const calculateDateRange = (dateRangeStr) => {
@@ -1002,7 +1004,7 @@ const calculateDateRange = (dateRangeStr) => {
   const currentYear = dayjs().year();
   const currentMonth = dayjs().month() + 1; // 1-12
 
- const parts = dateRangeStr.split('-').map(str => str.trim());
+  const parts = dateRangeStr.split('-').map(str => str.trim());
 
   if (parts.length === 1) {
     // Trường hợp: "(16)" -> Start = 16, End = 16
@@ -1082,10 +1084,17 @@ const parseTrackerItem = (logString) => {
   const dateRegex = /\(([^)]+)\)$/;
   const dateMatch = mainString.match(dateRegex);
 
-  if (!dateMatch) return null;
+  let rawDate = '';
+  let dates = {};
+  let remaining = ''
+  if (dateMatch) {
+    rawDate = dateMatch[1].trim(); // Có thể là "16" hoặc "19 - 24"
+    // 5. Tính toán ngày
+    dates = calculateDateRange(rawDate);
+    remaining = mainString.substring(0, dateMatch.index).trim();
+  };
 
-  const rawDate = dateMatch[1].trim(); // Có thể là "16" hoặc "19 - 24"
-  let remaining = mainString.substring(0, dateMatch.index).trim();
+  
 
   // 4. Check SubEvent
   const subEventRegex = /\(([^)]+)\)$/;
@@ -1101,9 +1110,6 @@ const parseTrackerItem = (logString) => {
     eventName = remaining;
     subEvent = "";
   }
-
-  // 5. Tính toán ngày
-  const dates = calculateDateRange(rawDate);
 
   return {
     eventName,
