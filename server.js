@@ -726,7 +726,7 @@ function getGameByIdAsync(gameId) {
 }
 
 app.post('/show-data', async (req, res) => {
-  const { gameId } = req.body;
+  const { gameId, startDate } = req.body;
   try {
     const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
 
@@ -746,10 +746,10 @@ app.post('/show-data', async (req, res) => {
 
     // tagId = '1552'
     const currentDate = dayjs();
-    const prevDate = currentDate.subtract(30, 'day')
+    // const prevDate = currentDate.subtract(30, 'day')
 
     const obj = JSON.parse('{"date_range": ["2025-12-23", "2026-01-21"], "search": "", "view": ["activity"], "tag26": ["136034"], "limit": 4000, "tag18": ["684110"], "init": 0, "page": 0, "category2": [], "tag37": [], "tag38": [], "tag28": []}');
-    obj.date_range = [prevDate.format('YYYY-MM-DD'), currentDate.format('YYYY-MM-DD')];
+    obj.date_range = [startDate, currentDate.format('YYYY-MM-DD')];
     obj.tag18 = [tagId.toString()];
     obj.limit = (Math.floor(Math.random() * (5000 - 100 + 1)) + 100).toString()
     let form = new FormData();
@@ -852,6 +852,7 @@ app.post('/check_item', async (req, res) => {
         name: item,
       };
 
+      // const indexesToRemove = [];
       let cnt = 0
       if (!data || !data?.startDateObj || !data?.eventName) {
         ret.url = data.url;
@@ -868,6 +869,7 @@ app.post('/check_item', async (req, res) => {
             && $(cells[4])?.text().toLowerCase().includes(data.eventName.toLowerCase())
             && $(cells[5])?.text().toLowerCase().includes((data.subEvent || '').toLowerCase())
           ) {
+            // indexesToRemove.push(i);
             cnt++;
           } else if (cnt > 1) {
             return false; // break loop
@@ -888,7 +890,19 @@ app.post('/check_item', async (req, res) => {
       resultData.push(ret);
     };
 
-    console.log(resultData);
+    // rows = rows.filter((index) => {
+    //     // Chỉ giữ lại những dòng có index KHÔNG nằm trong danh sách xóa
+    //     return !indexesToRemove.includes(index);
+    // });     
+    
+
+    // rows.each((i, row) => {
+    //   if ($(cells[0])?.text() == dayjs().format('MMMM D, YYYY')) {
+
+    //   }
+    // });
+
+    // console.log(resultData);
     res.json({
       success: true,
       resultData
@@ -1025,7 +1039,7 @@ const fetchGalleryInfo = async (galleryName, gameId) => {
     tagId = game.tagId || game.tagid;
   }
 
-  const obj = JSON.parse('{"limit": 10, "init": 0, "page": 0, "type": [], "status": [], "category": [], "non_category": [], "tag37": [], "tag38": [], "tag28": [], "tag34": [], "tag18": ["768367"], "tag35": [], "tag21": [], "tag29": [], "tag36": [], "tag22": [], "tag26": [], "tag45": [], "tag42": [], "tag9": [], "tag32": [], "tag4": [], "tag1": [], "tag2": [], "tag3": [], "tag10": [], "tag12": [], "tag7": [], "tag8": [], "tag11": [], "tag43": [], "tag13": [], "search": ""}');
+  const obj = JSON.parse('{"limit": 10000, "init": 0, "page": 0, "type": [], "status": [], "category": [], "non_category": [], "tag37": [], "tag38": [], "tag28": [], "tag34": [], "tag18": ["768367"], "tag35": [], "tag21": [], "tag29": [], "tag36": [], "tag22": [], "tag26": [], "tag45": [], "tag42": [], "tag9": [], "tag32": [], "tag4": [], "tag1": [], "tag2": [], "tag3": [], "tag10": [], "tag12": [], "tag7": [], "tag8": [], "tag11": [], "tag43": [], "tag13": [], "search": ""}');
   obj.tag18 = [tagId.toString()];
   obj.search = galleryName;
 
@@ -1037,7 +1051,7 @@ const fetchGalleryInfo = async (galleryName, gameId) => {
 
 
 
-  console.log("bat dau goi");
+  // console.log("bat dau goi");
 
   let response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/post-cnd', form, {
     headers: {
