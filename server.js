@@ -725,6 +725,66 @@ function getGameByIdAsync(gameId) {
   });
 }
 
+app.post('/show-data', async (req, res) => {
+  const { gameId } = req.body;
+  try {
+    const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
+
+    if (datas.length === 0) {
+      res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
+      return;
+    }
+
+    let tagId = ''
+
+    const game = await getGameByIdAsync(gameId);
+
+    if (game) {
+      // Lưu ý: Postgres thường trả về tên cột thường. Hãy check DB nếu cột là tagId hay tagid
+      tagId = game.tagId || game.tagid;
+    }
+
+    // tagId = '1552'
+    const currentDate = dayjs();
+    const prevDate = currentDate.subtract(30, 'day')
+
+    const obj = JSON.parse('{"date_range": ["2025-12-23", "2026-01-21"], "search": "", "view": ["activity"], "tag26": ["136034"], "limit": 4000, "tag18": ["684110"], "init": 0, "page": 0, "category2": [], "tag37": [], "tag38": [], "tag28": []}');
+    obj.date_range = [prevDate.format('YYYY-MM-DD'), currentDate.format('YYYY-MM-DD')];
+    obj.tag18 = [tagId.toString()];
+    obj.limit = (Math.floor(Math.random() * (5000 - 100 + 1)) + 100).toString()
+    let form = new FormData();
+
+    form.append('csrf', datas.csrf);
+    form.append('plugin', 'event');
+    form.append('action', 'searchItem');
+    form.append('vo-action', '');
+    form.append('filter_conditions', JSON.stringify(obj))
+
+    console.log(form);
+
+    let response = await axios.post('https://my.liquidandgrit.com/action/public/cms/plugin', form, {
+      headers: {
+        Cookie: datas.cookies,
+        "Content-Type": "text/html; charset=UTF-8",
+      },
+      responseType: "text"
+    });
+
+    let data = JSON.parse(response.data);
+
+    res.json({
+      success: true,
+      content_html: data.content_html
+    });
+
+
+  } catch (error) {
+    console.error("❌ Error ", err.message);
+    res.status(500).json({ error: err.message });
+  }
+
+});
+
 app.post('/check_item', async (req, res) => {
   const { checkData, gameId } = req.body;
   try {
