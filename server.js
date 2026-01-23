@@ -279,7 +279,17 @@ app.post('/upload', upload2.single('file'), async (req, res) => {
     );
 
     // Xóa file tạm sau khi gửi xong
-    fs.unlink(req.file.path, () => { });
+    // fs.unlink(req.file.path, () => { });
+    if (fileStream) {
+        fileStream.destroy(); 
+    }
+
+    // 2. Xóa file (Nên dùng setTimeout nhỏ hoặc unlink trong callback để chắc chắn OS đã nhả file)
+    fs.unlink(req.file.path, (err) => {
+        if (err) console.error(`Không thể xóa file tạm: ${req.file.path}`, err);
+        else console.log(`Đã xóa file tạm: ${req.file.path}`);
+    });
+
 
     if(needUpdateFileName) {
       response.data.file.name = customerFilename;
