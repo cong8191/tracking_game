@@ -247,16 +247,27 @@ app.post('/upload', upload2.single('file'), async (req, res) => {
       return res.status(400).json({ error: 'Missing file' });
     }
 
+    
+    const customerFilename = req.body.customFilename || '';
+    const needUpdateFileName = customerFilename.includes('/') && req.body.isLastChunk;
+    // console.log(needUpdateFileName);
+    
     const form = new FormData1();
     for (const [key, value] of Object.entries(req.body)) {
-      form.append(key, value);
-    }
+      
 
+      if( key === 'flowFilename' && !customerFilename.includes('/')) {
+        form.append(key, customerFilename);
+      } else {
+        form.append(key, value);
+      }
+    }
+    
     // Stream file thay vì dùng buffer
     const fileStream = fs.createReadStream(req.file.path);
     form.append('file', fileStream, req.file.originalname);
 
-    const response = await axios.post(
+    let response = await axios.post(
       'https://my.liquidandgrit.com/action/admin/cms/file-upload-v3',
       form,
       {
@@ -270,7 +281,31 @@ app.post('/upload', upload2.single('file'), async (req, res) => {
     // Xóa file tạm sau khi gửi xong
     fs.unlink(req.file.path, () => { });
 
-    res.json({ success: true, result: 'OK' });
+    if(needUpdateFileName) {
+      response.data.file.name = customerFilename;
+      response.data.file.order_index = req.body.order_index;
+      response.data.file.type = '1';
+
+      const form2 = new FormData();
+      form2.append('csrf', datas.csrf);
+      form2.append('vo-action', 'save_file');
+      form2.append('type', '2');
+      form2.append('id', req.body.id);
+      form2.append('file', JSON.stringify(response.data.file));
+      console.log(form2);
+      
+      response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', form2, {
+        headers: {
+          Cookie: datas.cookies,
+          "Content-Type": "text/html; charset=UTF-8",
+        },
+        responseType: "text"
+      });
+
+      // console.log(response.data);
+      
+    }
+    res.json({ success: true, result: "OK" });
   } catch (err) {
     console.error(err);
     res.status(500).send('Proxy error while uploading.');
