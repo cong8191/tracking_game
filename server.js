@@ -859,7 +859,7 @@ app.post('/check_item', async (req, res) => {
     const prevDate = currentDate.subtract(30, 'day')
 
     const obj = JSON.parse('{"date_range": ["2025-12-23", "2026-01-21"], "search": "", "view": ["activity"], "tag26": ["136034"], "limit": 4000, "tag18": ["684110"], "init": 0, "page": 0, "category2": [], "tag37": [], "tag38": [], "tag28": []}');
-    obj.date_range = [prevDate.format('YYYY-MM-DD'), currentDate.format('YYYY-MM-DD')];
+    obj.date_range = [prevDate.format('YYYY-MM-DD'), currentDate.add(10,"day").format('YYYY-MM-DD')];
     obj.tag18 = [tagId.toString()];
     obj.limit = (Math.floor(Math.random() * (5000 - 100 + 1)) + 100).toString()
     let form = new FormData();
