@@ -912,7 +912,7 @@ app.post('/check_item', async (req, res) => {
           if ($(cells[0])?.text() == data.startDateObj.format('MMMM D, YYYY')
             && $(cells[1])?.text() == data.endDateObj.format('MMMM D, YYYY')
             && $(cells[4])?.text().toLowerCase().includes(data.eventName.toLowerCase())
-            && (data.subEvent || '')toLowerCase() == $(cells[5])?.text().toLowerCase()
+            && (data.subEvent || '').toLowerCase() == $(cells[5])?.text().toLowerCase()
           ) {
             // indexesToRemove.push(i);
             cnt++;
