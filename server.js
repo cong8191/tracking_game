@@ -794,7 +794,7 @@ app.post('/show-data', async (req, res) => {
     // const prevDate = currentDate.subtract(30, 'day')
 
     const obj = JSON.parse('{"date_range": ["2025-12-23", "2026-01-21"], "search": "", "view": ["activity"], "tag26": ["136034"], "limit": 4000, "tag18": ["684110"], "init": 0, "page": 0, "category2": [], "tag37": [], "tag38": [], "tag28": []}');
-    obj.date_range = [startDate, currentDate.format('YYYY-MM-DD')];
+    obj.date_range = [startDate, currentDate.add(30,"day").format('YYYY-MM-DD')];
     obj.tag18 = [tagId.toString()];
     obj.limit = (Math.floor(Math.random() * (5000 - 100 + 1)) + 100).toString()
     let form = new FormData();
@@ -862,6 +862,8 @@ app.post('/check_item', async (req, res) => {
     obj.date_range = [prevDate.format('YYYY-MM-DD'), currentDate.add(30,"day").format('YYYY-MM-DD')];
     obj.tag18 = [tagId.toString()];
     obj.limit = (Math.floor(Math.random() * (5000 - 100 + 1)) + 100).toString()
+    console.log(obj);
+    
     let form = new FormData();
 
     form.append('csrf', datas.csrf);
@@ -870,7 +872,7 @@ app.post('/check_item', async (req, res) => {
     form.append('vo-action', '');
     form.append('filter_conditions', JSON.stringify(obj))
 
-    console.log(form);
+    // console.log(form);
 
     let response = await axios.post('https://my.liquidandgrit.com/action/public/cms/plugin', form, {
       headers: {
@@ -896,11 +898,14 @@ app.post('/check_item', async (req, res) => {
       const ret = {
         name: item,
       };
+      console.log(data);
+      
+      
 
       // const indexesToRemove = [];
       let cnt = 0
       if (!data || !data?.startDateObj || !data?.eventName) {
-        ret.url = data.url;
+        ret.url = data?.url;
         cnt = 1;
 
       } else {
@@ -1165,15 +1170,15 @@ const calculateDateRange = (dateRangeStr) => {
   } else {
     startDay = parseInt(startStr);
     // Logic: Nếu ngày bắt đầu > ngày kết thúc -> lùi 1 tháng
-    if (startDay > currentDay) {
-      startMonth = currentMonth - 1;
-      if (startMonth === 0) {
-        startMonth = 12;
-        startYear -= 1;
-      }
-    } else {
-      startMonth = currentMonth;
-    }
+    // if (startDay > currentDay) {
+    //   startMonth = currentMonth + 1;
+    //   if (startMonth === 0) {
+    //     startMonth = 12;
+    //     startYear -= 1;
+    //   }
+    // } else {
+    //   startMonth = currentMonth;
+    // }
   }
 
   // -- XỬ LÝ GIAO THỪA (29/12 - 1/1) --
