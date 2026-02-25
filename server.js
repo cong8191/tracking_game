@@ -397,6 +397,11 @@ app.post('/updateContent', async (req, res) => {
     await axios.post(GOOGLE_SCRIPT_URL, params, {
       headers: { "Content-Type": "application/json" }
     });
+
+    res.json({
+      success: true,
+    });
+
   } catch (err) {
     console.error("❌ lỗi tạo goole sheet:", err.message);
     res.status(500).json({ error: err.message });
