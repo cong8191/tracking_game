@@ -385,6 +385,8 @@ app.post('/createNewGallery', async (req, res) => {
     return res.status(400).json({ error: 'Thiếu dữ liệu: game' });
   }
 
+  let postSlug = '';
+
   try {
 
     const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
@@ -474,6 +476,8 @@ app.post('/createNewGallery', async (req, res) => {
         post_slug: data.post_slug
       }
     });
+
+    postSlug = data.post_slug;
     // data.gallery_id
     // data.post_slug
 
@@ -481,6 +485,22 @@ app.post('/createNewGallery', async (req, res) => {
     console.error("❌ lỗi tạo gallery:", err.message);
     res.status(500).json({ error: err.message });
     return;
+  }
+
+  try {
+     
+    const params = {
+      date: dayjs(publicDate).format("DD/MM/YYYY"),
+      name: game.name,
+      events: [`<p>-Added gallery <span style="color: rgb(255, 0, 0)">${galleryName}</span></p><p><a href="https://my.liquidandgrit.com/library/gallery/${postSlug}" rel="noopener noreferrer" target="_blank" style="color: rgb(17, 85, 204);">https://my.liquidandgrit.com/library/gallery/${postSlug}</a></p>`]
+    }
+
+    await axios.post(GOOGLE_SCRIPT_URL, params, {
+      headers: { "Content-Type": "application/json" }
+    });
+  } catch (err) {
+    console.error("❌ lỗi tạo goole sheet:", err.message);
+    res.status(500).json({ error: err.message });
   }
 
 });
