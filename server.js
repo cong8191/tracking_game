@@ -374,6 +374,37 @@ function getEventByIdAsync(id) {
   });
 }
 
+app.post('/updateContent', async (req, res) => {
+  const { gameId, selectedDate , content} = req.body;
+  if (!gameId ) {
+    return res.status(400).json({ error: 'Thiếu dữ liệu: gameId là bắt buộc.' });
+  }
+
+  const game = await getGameByIdAsync(gameId);
+  if (!game) {
+    return res.status(400).json({ error: 'Thiếu dữ liệu: game' });
+  }
+
+  try {
+     
+    const params = {
+      date: dayjs(selectedDate).format("DD/MM/YYYY"),
+      name: game.name,
+      events: [content || ''],
+      isAppendOldText: false
+    }
+
+    await axios.post(GOOGLE_SCRIPT_URL, params, {
+      headers: { "Content-Type": "application/json" }
+    });
+  } catch (err) {
+    console.error("❌ lỗi tạo goole sheet:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+
+
+})
+
 app.post('/createNewGallery', async (req, res) => {
   const { gameId, galleryName, IsContent, publicDate } = req.body;
   if (!gameId || !galleryName) {
