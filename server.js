@@ -426,7 +426,6 @@ app.post('/getContent', async (req, res) => {
     const params = {
       date: dayjs(selectedDate).format("DD/MM/YYYY"),
       name: game.name,
-      events: [content || ''],
       action: action || 'GetDataHtml'
     }
 
