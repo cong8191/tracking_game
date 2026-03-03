@@ -9,6 +9,10 @@ const PORT = process.env.PORT || 3000;
 const cors = require('cors');
 const multer = require('multer');
 const upload = multer({ storage: multer.memoryStorage() });
+const customParseFormat = require('dayjs/plugin/customParseFormat');
+
+// Kích hoạt plugin
+dayjs.extend(customParseFormat);
 
 // --- KẾT NỐI POSTGRES ---
 // Thay Client bằng Pool
@@ -920,7 +924,7 @@ app.post('/show-data', async (req, res) => {
 });
 
 app.post('/check_item', async (req, res) => {
-  const { checkData, gameId } = req.body;
+  const { checkData, gameId, selectedDate } = req.body;
   try {
     const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
 
@@ -987,7 +991,6 @@ app.post('/check_item', async (req, res) => {
       const ret = {
         name: item,
       };
-      console.log(data);
       
       
 
@@ -1022,6 +1025,8 @@ app.post('/check_item', async (req, res) => {
           ret.url = result.permalink;
           ret.editLink = `https://my.liquidandgrit.com/admin/cms/blog/?page=8&gallery-edit-instance=${result.id}`;
         }
+
+        ret.data = data;
       }
 
       ret.cnt = cnt;
@@ -1029,17 +1034,40 @@ app.post('/check_item', async (req, res) => {
       resultData.push(ret);
     };
 
-    // rows = rows.filter((index) => {
-    //     // Chỉ giữ lại những dòng có index KHÔNG nằm trong danh sách xóa
-    //     return !indexesToRemove.includes(index);
-    // });     
-    
+    const daysevent = [];
+    rows.each((i, row) => {
+      const cells = $(row).find('td');
 
-    // rows.each((i, row) => {
-    //   if ($(cells[0])?.text() == dayjs().format('MMMM D, YYYY')) {
+      if ($(cells[0])?.text() == dayjs(selectedDate).format('MMMM D, YYYY')){
+        daysevent.push({
+          start: dayjs(selectedDate).date(),
+          to: dayjs($(cells[1])?.text(), 'MMMM D, YYYY').date(),
+          eventName: $(cells[4])?.text().split(' - ')[0],
+          subEvent: $(cells[5])?.text(),
+          appName: $(cells[4])?.text()
+        })
+      }
+    });
 
-    //   }
-    // });
+    const excludes = daysevent.filter(item => {
+      const matched = resultData.find(r => r.data?.eventName.toLowerCase() == item.eventName.toLowerCase() && r.data?.subEvent.toLowerCase() == item.subEvent.toLowerCase());
+      return !matched;
+    });
+
+    for (const item of excludes) {
+
+      const ret = {
+        name: `${item.eventName} ${item.subEvent == '' ? '' : '('+ item.subEvent +')'} (${item.start}-${item.to})`,  
+      };
+
+      const result = await fetchGalleryInfo(item.appName, gameId);
+        if (result?.id) {
+          ret.url = result.permalink;
+          ret.editLink = `https://my.liquidandgrit.com/admin/cms/blog/?page=8&gallery-edit-instance=${result.id}`;
+        }
+
+      resultData.push(ret);
+    }
 
     // console.log(resultData);
     res.json({
