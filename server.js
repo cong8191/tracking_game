@@ -1057,7 +1057,7 @@ app.post('/check_item', async (req, res) => {
     for (const item of excludes) {
 
       const ret = {
-        name: `${item.eventName} ${item.subEvent == '' ? '' : '('+ item.subEvent +')'} (${item.start}-${item.to})`,  
+        name: `${item.eventName} ${item.subEvent == '' ? '' : '('+ item.subEvent +')'} (${item.start}-${item.to})(NF)`,  
       };
 
       const result = await fetchGalleryInfo(item.appName, gameId);
