@@ -206,7 +206,7 @@ app.post('/delete_file', async (req, res) => {
   try {
 
 
-    if (!gallery_id, file) {
+    if (!gallery_id, !file) {
       return res.status(400).json({ error: 'Thiếu dữ liệu: name, gallery_id là bắt buộc.' });
     }
 
