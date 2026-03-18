@@ -923,6 +923,65 @@ app.post('/show-data', async (req, res) => {
 
 });
 
+app.post('/vewImage', async (req, res) => {
+  const { event_id } = req.body;
+  try {
+    const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
+
+    console.log(datas);
+    if (datas.length === 0) {
+      res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
+      return;
+    }
+
+
+
+    let form = new FormData();
+
+    form.append('csrf', datas.csrf);
+    form.append('id', event_id);
+
+    let response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', form, {
+      headers: {
+        Cookie: datas.cookies,
+        "Content-Type": "text/html; charset=UTF-8",
+      },
+      responseType: "text"
+    });
+
+    const data = JSON.parse(response.data);
+
+    if(!data.published_version) {
+      res.status(500).json({ error: "Chưa publish gallery" });
+      return;
+    }
+    form = new FormData();
+    form.append('blog_id', '1');
+    form.append('gallery_version_id', data.published_version);
+    form.append('image_size_array', '{"large": {"x": 940, "y": 625}, "small": {"x": 300, "y": 300}}');
+    form.append('preview_mode', false);
+    form.append('csrf', datas.csrf);
+
+    response = await axios.post('https://my.liquidandgrit.com/action/public/cms/blog/get-gallery', form, {
+      headers: {
+        Cookie: datas.cookies,
+        "Content-Type": "text/html; charset=UTF-8",
+      },
+      responseType: "text"
+    });
+
+
+
+    res.json({ success: true, result: response.data });
+
+  } catch (err) {
+    console.error("❌ Error calling Google Sheet:", err.message);
+    res.status(500).json({ error: err.message });
+    return;
+  }
+
+});
+
 app.post('/check_item', async (req, res) => {
   const { checkData, gameId, selectedDate } = req.body;
   try {
