@@ -1079,13 +1079,23 @@ app.post('/check_item', async (req, res) => {
 
         // console.log(`${data.eventName} - ${game.app_name}`);
 
-        const result = await fetchGalleryInfo(`${data.eventName} - ${game.app_name}`, gameId);
-        if (result?.id) {
-          ret.url = result.permalink;
-          ret.editLink = `https://my.liquidandgrit.com/admin/cms/blog/?page=8&gallery-edit-instance=${result.id}`;
-        }
-
         ret.data = data;
+
+        const result = await fetchGalleryInfo(`${data.eventName}`, gameId, true);
+        for (let index = 0; index < result.length; index++) {
+          const element = result[index];
+          if(index > 0) {
+            const ret2 = { ...ret};
+            ret2.url = element.permalink;
+            ret2.editLink = `https://my.liquidandgrit.com/admin/cms/blog/?page=8&gallery-edit-instance=${element.id}`;
+            ret2.viewImage = `/vewImage/${element.id}`;
+            resultData.push(ret2);
+          } else {
+            ret.url = element.permalink;
+            ret.editLink = `https://my.liquidandgrit.com/admin/cms/blog/?page=8&gallery-edit-instance=${element.id}`;
+            ret.viewImage = `/vewImage/${element.id}`;
+          }
+        }
       }
 
       ret.cnt = cnt;
@@ -1249,7 +1259,7 @@ app.post('/get-gallery-info', async (req, res) => {
 
 });
 
-const fetchGalleryInfo = async (galleryName, gameId) => {
+const fetchGalleryInfo = async (galleryName, gameId, retList = false) => {
   const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
 
   if (datas.length === 0) {
@@ -1265,7 +1275,7 @@ const fetchGalleryInfo = async (galleryName, gameId) => {
     tagId = game.tagId || game.tagid;
   }
 
-  const obj = JSON.parse('{"limit": 10000, "init": 0, "page": 0, "type": [], "status": [], "category": [], "non_category": [], "tag37": [], "tag38": [], "tag28": [], "tag34": [], "tag18": ["768367"], "tag35": [], "tag21": [], "tag29": [], "tag36": [], "tag22": [], "tag26": [], "tag45": [], "tag42": [], "tag9": [], "tag32": [], "tag4": [], "tag1": [], "tag2": [], "tag3": [], "tag10": [], "tag12": [], "tag7": [], "tag8": [], "tag11": [], "tag43": [], "tag13": [], "search": ""}');
+  const obj = JSON.parse('{"limit": 10000000, "init": 0, "page": 0, "type": [], "status": [], "category": [], "non_category": [], "tag37": [], "tag38": [], "tag28": [], "tag34": [], "tag18": ["768367"], "tag35": [], "tag21": [], "tag29": [], "tag36": [], "tag22": [], "tag26": [], "tag45": [], "tag42": [], "tag9": [], "tag32": [], "tag4": [], "tag1": [], "tag2": [], "tag3": [], "tag10": [], "tag12": [], "tag7": [], "tag8": [], "tag11": [], "tag43": [], "tag13": [], "search": ""}');
   obj.tag18 = [tagId.toString()];
   obj.search = galleryName;
 
@@ -1292,11 +1302,14 @@ const fetchGalleryInfo = async (galleryName, gameId) => {
 
   const contentList = response.data && response.data.content ? response.data.content : [];
 
-  const foundItem = contentList.find(item => item.name.toLowerCase() == galleryName.toLowerCase());
+  if(!retList) {
+     const foundItem = contentList.find(item => item.name.toLowerCase().includes(galleryName.toLowerCase()));
 
   return foundItem || {};
 
+  } 
 
+  return contentList.filter(item => item.name.toLowerCase().includes(galleryName.toLowerCase()));
 }
 
 const calculateDateRange = (dateRangeStr) => {
