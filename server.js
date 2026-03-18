@@ -972,7 +972,7 @@ app.post('/vewImage', async (req, res) => {
 
 
 
-    res.json({ success: true, result: response.data });
+    res.json({ success: true, result: JSON.parse(response.data)});
 
   } catch (err) {
     console.error("❌ Error calling Google Sheet:", err.message);
