@@ -200,6 +200,49 @@ app.get('/games', (req, res) => {
   });
 });
 
+app.post('/delete_file', async (req, res) => {
+
+ const { gallery_id, file } = req.body;
+  try {
+
+
+    if (!gallery_id, file) {
+      return res.status(400).json({ error: 'Thiếu dữ liệu: name, gallery_id là bắt buộc.' });
+    }
+
+    const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
+
+    console.log(datas);
+    if (datas.length === 0) {
+      res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
+      return;
+    }
+
+
+    const form2 = new FormData();
+      form2.append('csrf', datas.csrf);
+      form2.append('vo-action', 'delete_file');
+      form2.append('type', '2');
+      form2.append('id', gallery_id);
+      form2.append('file', JSON.stringify(file));
+      console.log(form2);
+      
+      response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', form2, {
+        headers: {
+          Cookie: datas.cookies,
+          "Content-Type": "text/html; charset=UTF-8",
+        },
+        responseType: "text"
+      });
+
+      res.json({ success: true, result: "OK" });
+
+  } catch (error) {
+     console.error(err);
+    res.status(500).send('loi khi xóa file.');
+  }
+});
+
 app.post('/getInfo', async (req, res) => {
   const { event_id } = req.body;
   try {
@@ -226,7 +269,7 @@ app.post('/getInfo', async (req, res) => {
       responseType: "text"
     });
 
-    data = JSON.parse(response.data);
+    const data = JSON.parse(response.data);
 
 
     res.json({ success: true, result: data });
