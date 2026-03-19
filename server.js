@@ -1094,12 +1094,20 @@ app.post('/check_item', async (req, res) => {
         name: item,
       };
       
+      ret.details = [];
       
 
       // const indexesToRemove = [];
       let cnt = 0
       if (!data || !data?.startDateObj || !data?.eventName) {
-        ret.url = data?.url;
+
+        const obj = {};
+        obj.url = data?.url;
+        // obj.editLink = `https://my.liquidandgrit.com/admin/cms/blog/?page=8&gallery-edit-instance=${element.id}`;
+        // obj.viewImage = `/vewImage/${element.id}`;
+        // obj.galleryId = element.id;
+        
+        ret.details.push(obj);
         cnt = 1;
 
       } else {
@@ -1124,20 +1132,17 @@ app.post('/check_item', async (req, res) => {
 
         ret.data = data;
 
-        const result = await fetchGalleryInfo(`${data.eventName}`, gameId, true);
+        const result = await fetchGalleryInfo(`${data.eventName} - ${game.app_name}`, gameId, true);
+
+        
         for (let index = 0; index < result.length; index++) {
-          const element = result[index];
-          if(index > 0) {
-            const ret2 = { ...ret};
-            ret2.url = element.permalink;
-            ret2.editLink = `https://my.liquidandgrit.com/admin/cms/blog/?page=8&gallery-edit-instance=${element.id}`;
-            ret2.viewImage = `/vewImage/${element.id}`;
-            resultData.push(ret2);
-          } else {
-            ret.url = element.permalink;
-            ret.editLink = `https://my.liquidandgrit.com/admin/cms/blog/?page=8&gallery-edit-instance=${element.id}`;
-            ret.viewImage = `/vewImage/${element.id}`;
-          }
+          const obj = {};
+          obj.url = element.permalink;
+          obj.editLink = `https://my.liquidandgrit.com/admin/cms/blog/?page=8&gallery-edit-instance=${element.id}`;
+          obj.viewImage = `/vewImage/${element.id}`;
+          obj.galleryId = element.id;
+          
+          ret.details.push(obj);
         }
       }
 
@@ -1169,13 +1174,19 @@ app.post('/check_item', async (req, res) => {
     for (const item of excludes) {
 
       const ret = {
-        name: `${item.eventName} ${item.subEvent == '' ? '' : '('+ item.subEvent +')'} (${item.start}-${item.to})(NF)`,  
+        name: `${item.eventName} ${item.subEvent == '' ? '' : '('+ item.subEvent +')'} (${item.start}-${item.to})( Other )`,  
       };
 
       const result = await fetchGalleryInfo(item.appName, gameId);
         if (result?.id) {
-          ret.url = result.permalink;
-          ret.editLink = `https://my.liquidandgrit.com/admin/cms/blog/?page=8&gallery-edit-instance=${result.id}`;
+          
+          const obj = {};
+          obj.url = result.permalink;
+          obj.editLink = `https://my.liquidandgrit.com/admin/cms/blog/?page=8&gallery-edit-instance=${result.id}`;
+          obj.viewImage = `/vewImage/${result.id}`;
+          obj.galleryId = result.id;
+          
+          ret.details.push(obj);
         }
 
       resultData.push(ret);
@@ -1346,13 +1357,13 @@ const fetchGalleryInfo = async (galleryName, gameId, retList = false) => {
   const contentList = response.data && response.data.content ? response.data.content : [];
 
   if(!retList) {
-     const foundItem = contentList.find(item => item.name.toLowerCase().includes(galleryName.toLowerCase()));
+     const foundItem = contentList.find(item => item.name.toLowerCase() == galleryName.toLowerCase());
 
   return foundItem || {};
 
   } 
 
-  return contentList.filter(item => item.name.toLowerCase().includes(galleryName.toLowerCase()));
+  return contentList.filter(item => galleryName.toLowerCase().toLowerCase().includes(item.name));
 }
 
 const calculateDateRange = (dateRangeStr) => {
