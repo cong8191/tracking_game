@@ -1101,13 +1101,29 @@ app.post('/check_item', async (req, res) => {
       let cnt = 0
       if (!data || !data?.startDateObj || !data?.eventName) {
 
-        const obj = {};
-        obj.url = data?.url;
-        // obj.editLink = `https://my.liquidandgrit.com/admin/cms/blog/?page=8&gallery-edit-instance=${element.id}`;
-        // obj.viewImage = `/vewImage/${element.id}`;
-        // obj.galleryId = element.id;
+       
+
+        if(data?.eventName != '') {
+          const result = await fetchGalleryInfo(`${data.eventName} - ${game.app_name}`, gameId, true);
+
         
-        ret.details.push(obj);
+          for (let index = 0; index < result.length; index++) {
+            const element  = result[index];
+            const obj = {};
+            obj.url = element.permalink;
+            obj.editLink = `https://my.liquidandgrit.com/admin/cms/blog/?page=8&gallery-edit-instance=${element.id}`;
+            obj.viewImage = `/vewImage/${element.id}`;
+            obj.galleryId = element.id;
+            
+            ret.details.push(obj);
+          }
+        } else {
+         const obj = {};
+        obj.url = data?.url;
+           ret.details.push(obj);
+        }
+        
+     
         cnt = 1;
 
       } else {
@@ -1136,6 +1152,7 @@ app.post('/check_item', async (req, res) => {
 
         
         for (let index = 0; index < result.length; index++) {
+          const element  = result[index];
           const obj = {};
           obj.url = element.permalink;
           obj.editLink = `https://my.liquidandgrit.com/admin/cms/blog/?page=8&gallery-edit-instance=${element.id}`;
@@ -1363,7 +1380,7 @@ const fetchGalleryInfo = async (galleryName, gameId, retList = false) => {
 
   } 
 
-  return contentList.filter(item => galleryName.toLowerCase().toLowerCase().includes(item.name));
+  return contentList.filter(item => galleryName.toLowerCase().toLowerCase().includes(item.name.toLowerCase()));
 }
 
 const calculateDateRange = (dateRangeStr) => {
@@ -1450,7 +1467,13 @@ const parseTrackerItem = (logString) => {
   const prefixMatch = contentPart.match(/(?:for|gallery)\s+/);
   if (!prefixMatch) return null;
 
+  const specialCharsRegex = /[\p{So}\p{Cf}]/gu;
+    
+    // Thực hiện thay thế: Bỏ dấu ngoặc kép và bỏ các ký tự đặc biệt
+  
+
   let mainString = contentPart.substring(prefixMatch.index + prefixMatch[0].length).trim();
+  mainString = mainString.replace(/"/g, '').replace(specialCharsRegex, '').trim();
 
   // 3. Cắt Date (Ngoặc cuối cùng)
   const dateRegex = /\(([^)]+)\)$/;
@@ -1479,7 +1502,7 @@ const parseTrackerItem = (logString) => {
     subEvent = subMatch[1].trim();
     eventName = remaining.substring(0, subMatch.index).trim();
   } else {
-    eventName = remaining;
+    eventName = remaining == '' ? mainString : remaining;
     subEvent = "";
   }
 
