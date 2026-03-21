@@ -1194,6 +1194,8 @@ app.post('/check_item', async (req, res) => {
         name: `${item.eventName} ${item.subEvent == '' ? '' : '('+ item.subEvent +')'} (${item.start}-${item.to})( Other )`,  
       };
 
+       ret.details = [];
+       
       const result = await fetchGalleryInfo(item.appName, gameId);
         if (result?.id) {
           
