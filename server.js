@@ -621,6 +621,39 @@ app.post('/createNewGallery', async (req, res) => {
 
 });
 
+app.post('/deleteEvent', (req, res) => {
+  const { eventId } = req.body;
+
+  if (!eventId) {
+    return res.status(400).json({ error: 'Thiếu dữ liệu: eventId' });
+  }
+
+  try {
+    const deleteSql = `
+  DELETE FROM event 
+  WHERE id = $1 
+`;
+
+  // eventId là id của bản ghi bạn muốn xóa
+  db.query(deleteSql, [eventId], function (err) {
+    if (err) {
+      console.error('❌ Delete error:', err);
+      return res.status(500).json({ error: 'Lỗi khi xóa sự kiện.' });
+    }
+
+    // rowCount giúp bạn kiểm tra xem có bản ghi nào thực sự bị xóa không
+    // (ví dụ id không tồn tại thì rowCount sẽ bằng 0)
+    res.json({
+      success: true,
+      message: 'Xóa sự kiện thành công',
+      deletedId: eventId
+    });
+  });
+  } catch (error) {
+     console.error("❌ Error ", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 app.post('/event', (req, res) => {
   const { name, gallery_id, g_name, gameId, default_day, eventId, post_slug } = req.body;
 
