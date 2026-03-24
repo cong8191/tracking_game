@@ -480,7 +480,21 @@ app.post('/getContent', async (req, res) => {
       headers: { "Content-Type": "application/json" }
     });
 
-    res.json(response.data);
+     const sql = `
+      SELECT event.*
+      FROM event where event.gameid = $1
+    `;
+
+    db.query(sql, [gameId], (err, resDb) => {
+      if (err) {
+        console.error('❌ DB error:', err);
+        return res.status(500).json({ error: 'Khong the lay thong tin event' });
+      }
+
+      res.json({data: response.data.data , events: resDb.rows});
+    });
+
+    
 
   } catch (err) {
     console.error("❌ lỗi tạo goole sheet:", err.message);
@@ -927,7 +941,6 @@ function getGameByIdAsync(gameId) {
       if (!resDb.rows[0]) return resolve(null);
 
       const row = resDb.rows[0];
-      console.log(JSON.stringify(row));
 
       const eventObject = {
         ...row,
@@ -1167,8 +1180,8 @@ app.post('/check_item', async (req, res) => {
 
           if ($(cells[0])?.text() == data.startDateObj.format('MMMM D, YYYY')
             && $(cells[1])?.text() == data.endDateObj.format('MMMM D, YYYY')
-            && $(cells[4])?.text().toLowerCase().includes(data.eventName.toLowerCase())
-            && (data.subEvent || '').toLowerCase() == $(cells[5])?.text().toLowerCase()
+            && $(cells[4])?.text().toLowerCase().trim().includes(data.eventName.toLowerCase().trim())
+            && (data.subEvent || '').toLowerCase().trim() == $(cells[5])?.text().toLowerCase().trim()
           ) {
             // indexesToRemove.push(i);
             cnt++;
@@ -1181,7 +1194,7 @@ app.post('/check_item', async (req, res) => {
 
         ret.data = data;
 
-        const result = await fetchGalleryInfo(`${data.eventName} - ${game.app_name}`, gameId, true);
+        const result = await fetchGalleryInfo(data.eventName, gameId, game.app_name, true);
 
         
         for (let index = 0; index < result.length; index++) {
@@ -1217,7 +1230,7 @@ app.post('/check_item', async (req, res) => {
     });
 
     const excludes = daysevent.filter(item => {
-      const matched = resultData.find(r => r.data?.eventName.toLowerCase() == item.eventName.toLowerCase() && r.data?.subEvent.toLowerCase() == item.subEvent.toLowerCase());
+      const matched = resultData.find(r => r.data?.eventName.toLowerCase().trim() == item.eventName.toLowerCase().trim() && r.data?.subEvent.toLowerCase().trim() == item.subEvent.toLowerCase().trim());
       return !matched;
     });
 
@@ -1365,7 +1378,7 @@ app.post('/get-gallery-info', async (req, res) => {
 
 });
 
-const fetchGalleryInfo = async (galleryName, gameId, retList = false) => {
+const fetchGalleryInfo = async (galleryName, gameId, gameName = '', retList = false) => {
   const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
 
   if (datas.length === 0) {
@@ -1415,7 +1428,7 @@ const fetchGalleryInfo = async (galleryName, gameId, retList = false) => {
 
   } 
 
-  return contentList.filter(item => galleryName.toLowerCase().toLowerCase().includes(item.name.toLowerCase()));
+  return contentList.filter(item => `${galleryName} - ${gameName}`.toLowerCase().toLowerCase().includes(item.name.toLowerCase()));
 }
 
 const calculateDateRange = (dateRangeStr) => {
