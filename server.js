@@ -668,6 +668,53 @@ app.post('/deleteEvent', (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+app.post('/get_event_suggest', async (req, res) => {
+  const { gameId, selectedDate } = req.body;
+
+  // 1. Kiểm tra đầu vào
+  if (!gameId || !selectedDate) {
+    return res.status(400).json({ error: 'Thiếu dữ liệu: gameId và selectedDate là bắt buộc.' });
+  }
+
+  try {
+    // 2. Tạo mảng 3 ngày liên tiếp (cách nhau 7 ngày) dùng dayjs
+    const base = dayjs(selectedDate);
+    const dates = [
+      base.subtract(7, 'day').format('YYYY/MM/DD'),  // 2026/03/20
+      base.subtract(14, 'day').format('YYYY/MM/DD'), // 2026/03/13
+      base.subtract(21, 'day').format('YYYY/MM/DD')  // 2026/03/06
+    ];
+
+    // 3. SQL Query
+    const selectSql = `
+      SELECT DISTINCT 
+        EVENT.*, 
+        (ACTION.to::date - ACTION.from::date) AS days_diff 
+      FROM ACTION 
+      INNER JOIN EVENT ON EVENT.id = ACTION.EVENTId 
+      WHERE EVENT.gameid = $1 
+      AND EVENT.DATE::date = ANY($2::date[])
+      AND EVENT.id NOT IN (
+        SELECT EVENTId 
+        FROM ACTION 
+        WHERE DATE = $3
+      )
+    `;
+
+    // 4. Query DB (Dùng 'result' để không trùng với 'res' của Express)
+    const result = await db.query(selectSql, [gameId, dates, base.format('YYYY/MM/DD')]);
+
+    // 5. Trả kết quả
+    return res.json({
+      data: result.rows
+    });
+
+  } catch (err) {
+    console.error('Lỗi server:', err.message);
+    return res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
 app.post('/event', (req, res) => {
   const { name, gallery_id, g_name, gameId, default_day, eventId, post_slug } = req.body;
 
