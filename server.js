@@ -694,7 +694,7 @@ app.post('/get_event_suggest', async (req, res) => {
       FROM ACTION 
       INNER JOIN EVENT ON EVENT.id = ACTION.EVENTId 
       WHERE EVENT.gameid = $1 
-      AND EVENT.DATE::date = ANY($2::date[])
+      AND ACTION.DATE::date = ANY($2::date[])
       AND EVENT.id NOT IN (
         SELECT EVENTId 
         FROM ACTION 
@@ -706,9 +706,7 @@ app.post('/get_event_suggest', async (req, res) => {
     const result = await db.query(selectSql, [gameId, dates, base.format('YYYY/MM/DD')]);
 
     // 5. Trả kết quả
-    return res.json({
-      data: result.rows
-    });
+    return res.json(result.rows);
 
   } catch (err) {
     console.error('Lỗi server:', err.message);
