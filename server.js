@@ -576,6 +576,7 @@ app.post('/createNewGallery', async (req, res) => {
 
 
     const currentDate = dayjs();
+	const pastDate = currentDate.subtract(7, 'hour');
 
     form = new FormData();
     form.append('csrf', datas.csrf);
@@ -587,9 +588,9 @@ app.post('/createNewGallery', async (req, res) => {
     form.append('post[publish][month]', dayjs(publicDate).month() + 1);
     form.append('post[publish][day]', dayjs(publicDate).date());
     form.append('post[publish][year]', dayjs(publicDate).year());
-    form.append('post[publish][hour]', currentDate.format('h'));
-    form.append('post[publish][minute]', currentDate.format('mm'));
-    form.append('post[publish][meridian]', currentDate.format('A'));
+    form.append('post[publish][hour]', pastDate.format('h'));
+    form.append('post[publish][minute]', pastDate.format('mm'));
+    form.append('post[publish][meridian]', pastDate.format('A'));
 
     response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', form, {
       headers: {
