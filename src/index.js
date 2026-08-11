@@ -15,10 +15,24 @@ app.use('*', cors());
 // Default Google Script URL fallback
 const GOOGLE_SCRIPT_URL_DEFAULT = "https://script.google.com/macros/s/AKfycbwzIlzn5gfKE38-mAGx1W7VCPfCu78nYDEnPmb6aUPVRl_dWALFthGYHFYbCSqyB0WLYw/exec";
 
-// In-memory cookies fallback for local development if KV is not bound
+// In-memory cookies fallback for local development if DB/KV is not available
 let memoryCookies = null;
 
+async function ensureSettingsTable(db) {
+  try {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS system_settings (
+        key VARCHAR(255) PRIMARY KEY,
+        value TEXT
+      )
+    `);
+  } catch (err) {
+    console.error('Error creating system_settings table:', err.message);
+  }
+}
+
 async function getStoredCookies(c) {
+  // 1. Try Cloudflare KV if bound
   if (c.env && c.env.COOKIES_KV) {
     try {
       const kvVal = await c.env.COOKIES_KV.get('login_cookies');
@@ -27,18 +41,50 @@ async function getStoredCookies(c) {
       console.error('KV get error:', err);
     }
   }
+
+  // 2. Try PostgreSQL DB (Persistent across all reloads and deploys)
+  try {
+    const db = getDb(c);
+    await ensureSettingsTable(db);
+    const res = await db.query("SELECT value FROM system_settings WHERE key = 'login_cookies'");
+    if (res.rows[0]?.value) {
+      const parsed = JSON.parse(res.rows[0].value);
+      memoryCookies = parsed;
+      return parsed;
+    }
+  } catch (err) {
+    console.error('DB cookie get error:', err.message);
+  }
+
+  // 3. Fallback to memory
   return memoryCookies || {};
 }
 
 async function saveStoredCookies(c, dataStr) {
   const parsed = typeof dataStr === 'string' ? JSON.parse(dataStr) : dataStr;
+  const jsonString = JSON.stringify(parsed);
   memoryCookies = parsed;
+
+  // 1. Try Cloudflare KV if bound
   if (c.env && c.env.COOKIES_KV) {
     try {
-      await c.env.COOKIES_KV.put('login_cookies', JSON.stringify(parsed));
+      await c.env.COOKIES_KV.put('login_cookies', jsonString);
     } catch (err) {
       console.error('KV put error:', err);
     }
+  }
+
+  // 2. Save to PostgreSQL DB permanently
+  try {
+    const db = getDb(c);
+    await ensureSettingsTable(db);
+    await db.query(`
+      INSERT INTO system_settings (key, value)
+      VALUES ('login_cookies', $1)
+      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+    `, [jsonString]);
+  } catch (err) {
+    console.error('DB cookie save error:', err.message);
   }
 }
 
