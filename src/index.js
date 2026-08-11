@@ -475,6 +475,71 @@ app.post('/upload', async (c) => {
       return c.json({ error: 'No cookies or CSRF token found. Please login first.' }, 500);
     }
 
+    const queryStream = c.req.query('stream') === 'true' || c.req.header('x-stream-upload') === 'true';
+
+    // Direct Streaming Mode: Forward request body stream directly to bypass 128MB RAM Worker limits
+    if (queryStream) {
+      const customFilename = c.req.query('customFilename') || c.req.header('x-custom-filename') || '';
+      const isLastChunk = c.req.query('isLastChunk') === 'true' || c.req.header('x-is-last-chunk') === 'true';
+      const orderIndex = c.req.query('order_index') || c.req.header('x-order-index') || '';
+      const galleryId = c.req.query('id') || c.req.header('x-gallery-id') || '';
+
+      const reqHeaders = new Headers();
+      reqHeaders.set('Cookie', datas.cookies);
+      if (c.req.header('content-type')) {
+        reqHeaders.set('Content-Type', c.req.header('content-type'));
+      }
+      reqHeaders.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+
+      const resUpload = await fetch('https://my.liquidandgrit.com/action/admin/cms/file-upload-v3', {
+        method: 'POST',
+        headers: reqHeaders,
+        body: c.req.raw.body,
+        duplex: 'half'
+      });
+
+      const resText = await resUpload.text();
+      let uploadResult = null;
+      try {
+        uploadResult = JSON.parse(resText);
+      } catch (parseErr) {
+        if (resUpload.ok) {
+          uploadResult = { message: resText };
+        } else {
+          console.error(`Stream upload error: Target server returned non-JSON response (HTTP ${resUpload.status}):`, resText.slice(0, 500));
+          return c.json({
+            error: `Upstream upload error (HTTP ${resUpload.status}). Server returned HTML or invalid response.`,
+            details: resText.slice(0, 300)
+          }, resUpload.status >= 400 ? resUpload.status : 500);
+        }
+      }
+
+      if (customFilename.includes('/') && isLastChunk && uploadResult && uploadResult.file) {
+        uploadResult.file.name = customFilename;
+        uploadResult.file.order_index = orderIndex;
+        uploadResult.file.type = '1';
+
+        const form2 = new FormData();
+        form2.append('csrf', datas.csrf);
+        form2.append('vo-action', 'save_file');
+        form2.append('type', '2');
+        form2.append('id', galleryId);
+        form2.append('file', JSON.stringify(uploadResult.file));
+
+        await fetch('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', {
+          method: 'POST',
+          headers: {
+            Cookie: datas.cookies,
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+          },
+          body: form2
+        });
+      }
+
+      return c.json({ success: true, result: uploadResult || "OK" });
+    }
+
+    // Standard Form Data Parsing Mode
     const body = await c.req.parseBody();
     const uploadedFile = body['file'];
 
@@ -483,7 +548,8 @@ app.post('/upload', async (c) => {
     }
 
     const customerFilename = (body.customFilename || '').toString();
-    const needUpdateFileName = customerFilename.includes('/') && body.isLastChunk;
+    const isLastChunk = body.isLastChunk === true || body.isLastChunk === 'true' || body.isLastChunk === '1' || body.isLastChunk === 1;
+    const needUpdateFileName = customerFilename.includes('/') && isLastChunk;
 
     const form = new FormData();
     for (const [key, value] of Object.entries(body)) {
@@ -495,19 +561,46 @@ app.post('/upload', async (c) => {
       }
     }
 
-    form.append('file', uploadedFile, uploadedFile.name || 'file');
+    if (uploadedFile instanceof Blob || uploadedFile instanceof File) {
+      form.append('file', uploadedFile, uploadedFile.name || 'file');
+    } else {
+      form.append('file', uploadedFile);
+    }
 
     const resUpload = await fetch('https://my.liquidandgrit.com/action/admin/cms/file-upload-v3', {
       method: 'POST',
       headers: {
-        Cookie: datas.cookies
+        Cookie: datas.cookies,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
       },
       body: form
     });
 
-    const uploadResult = await resUpload.json();
+    const resText = await resUpload.text();
+    let uploadResult = null;
+    try {
+      uploadResult = JSON.parse(resText);
+    } catch (parseErr) {
+      if (resUpload.ok) {
+        uploadResult = { message: resText };
+      } else {
+        console.error(`Upload error: Target server returned non-JSON response (HTTP ${resUpload.status}):`, resText.slice(0, 500));
+        return c.json({
+          error: `Upstream upload error (HTTP ${resUpload.status}). Server returned HTML or invalid response.`,
+          details: resText.slice(0, 300)
+        }, resUpload.status >= 400 ? resUpload.status : 500);
+      }
+    }
 
-    if (needUpdateFileName && uploadResult.file) {
+    if (!resUpload.ok || (uploadResult && uploadResult.error)) {
+      console.error("Upload error response from upstream:", uploadResult);
+      return c.json({
+        error: uploadResult?.error || uploadResult?.message || `Upstream returned HTTP ${resUpload.status}`,
+        uploadResult
+      }, resUpload.status >= 400 ? resUpload.status : 500);
+    }
+
+    if (needUpdateFileName && uploadResult && uploadResult.file) {
       uploadResult.file.name = customerFilename;
       uploadResult.file.order_index = body.order_index;
       uploadResult.file.type = '1';
@@ -519,19 +612,24 @@ app.post('/upload', async (c) => {
       form2.append('id', body.id);
       form2.append('file', JSON.stringify(uploadResult.file));
 
-      await fetch('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', {
+      const resEdit = await fetch('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', {
         method: 'POST',
         headers: {
-          Cookie: datas.cookies
+          Cookie: datas.cookies,
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         },
         body: form2
       });
+
+      if (!resEdit.ok) {
+        console.error("Gallery edit update failed with status:", resEdit.status);
+      }
     }
 
-    return c.json({ success: true, result: "OK" });
+    return c.json({ success: true, result: uploadResult || "OK" });
   } catch (err) {
-    console.error("Upload error:", err);
-    return c.text('Proxy error while uploading.', 500);
+    console.error("Upload error:", err.stack || err.message || err);
+    return c.json({ error: `Proxy upload error: ${err.message || err}` }, 500);
   }
 });
 
