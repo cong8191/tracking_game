@@ -9,8 +9,5 @@
   "assets": {
     "directory": "./build",
     "binding": "ASSETS"
-  },
-  "vars": {
-    "GOOGLE_SCRIPT_URL": "https://script.google.com/macros/s/AKfycbwzIlzn5gfKE38-mAGx1W7VCPfCu78nYDEnPmb6aUPVRl_dWALFthGYHFYbCSqyB0WLYw/exec"
   }
 }
