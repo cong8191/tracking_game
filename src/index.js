@@ -15,7 +15,7 @@ app.use('*', cors());
 // Default Google Script URL fallback
 const GOOGLE_SCRIPT_URL_DEFAULT = "https://script.google.com/macros/s/AKfycbwzIlzn5gfKE38-mAGx1W7VCPfCu78nYDEnPmb6aUPVRl_dWALFthGYHFYbCSqyB0WLYw/exec";
 
-// In-memory cookies fallback for local development if DB/KV is not available
+// In-memory RAM cache for cookies to avoid hitting DB/KV on every request
 let memoryCookies = null;
 
 async function ensureSettingsTable(db) {
@@ -32,17 +32,25 @@ async function ensureSettingsTable(db) {
 }
 
 async function getStoredCookies(c) {
-  // 1. Try Cloudflare KV if bound
+  // 1. FAST PATH: Return directly from RAM memory if already cached! (0ms, 0 DB queries)
+  if (memoryCookies && Object.keys(memoryCookies).length > 0) {
+    return memoryCookies;
+  }
+
+  // 2. Try Cloudflare KV if bound
   if (c.env && c.env.COOKIES_KV) {
     try {
       const kvVal = await c.env.COOKIES_KV.get('login_cookies');
-      if (kvVal) return JSON.parse(kvVal);
+      if (kvVal) {
+        memoryCookies = JSON.parse(kvVal);
+        return memoryCookies;
+      }
     } catch (err) {
       console.error('KV get error:', err);
     }
   }
 
-  // 2. Try PostgreSQL DB (Persistent across all reloads and deploys)
+  // 3. COLD START: Fetch from PostgreSQL DB ONCE, then cache in RAM memory
   try {
     const db = getDb(c);
     await ensureSettingsTable(db);
@@ -56,13 +64,14 @@ async function getStoredCookies(c) {
     console.error('DB cookie get error:', err.message);
   }
 
-  // 3. Fallback to memory
   return memoryCookies || {};
 }
 
 async function saveStoredCookies(c, dataStr) {
   const parsed = typeof dataStr === 'string' ? JSON.parse(dataStr) : dataStr;
   const jsonString = JSON.stringify(parsed);
+
+  // Update RAM memory cache immediately
   memoryCookies = parsed;
 
   // 1. Try Cloudflare KV if bound
