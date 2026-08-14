@@ -980,6 +980,16 @@ app.post('/deleteEvent', async (c) => {
   }
 });
 
+const VIETNAMESE_DAYS = [
+  "Chủ nhật",
+  "Thứ hai",
+  "Thứ ba",
+  "Thứ tư",
+  "Thứ năm",
+  "Thứ sáu",
+  "Thứ bảy"
+];
+
 // POST /get_event_suggest
 app.post('/get_event_suggest', async (c) => {
   const body = await c.req.json();
@@ -989,35 +999,94 @@ app.post('/get_event_suggest', async (c) => {
     return c.json({ error: 'Thiếu dữ liệu: gameId và selectedDate là bắt buộc.' }, 400);
   }
 
-  const db = getDb(c);
   try {
-    const base = dayjs(selectedDate);
-    const dates = [
-      base.subtract(7, 'day').format('YYYY/MM/DD'),
-      base.subtract(14, 'day').format('YYYY/MM/DD'),
-      base.subtract(21, 'day').format('YYYY/MM/DD')
-    ];
-
+    const db = getDb(c);
     const selectSql = `
       SELECT DISTINCT 
-        EVENT.*, 
-        (ACTION.to::date - ACTION.from::date) AS days_diff 
-      FROM ACTION 
-      INNER JOIN EVENT ON EVENT.id = ACTION.EVENTId 
-      WHERE EVENT.gameid = $1 
-      AND ACTION.DATE::date = ANY($2::date[])
-      AND EVENT.id NOT IN (
-        SELECT EVENTId 
-        FROM ACTION 
-        WHERE DATE = $3
-      )
+        e.id,
+        e.name,
+        e.g_name,
+        e.gallery_id,
+        e.default_day,
+        e.post_slug,
+        TO_CHAR(a."from"::date, 'YYYY/MM/DD') AS "from",
+        TO_CHAR(a."to"::date, 'YYYY/MM/DD') AS "to",
+        (a."to"::date - a."from"::date) AS totalday,
+        CASE 
+          WHEN a."from"::date = ($1::date - INTERVAL '7 days') THEN 'last-week'
+          WHEN a."from"::date = ($1::date - INTERVAL '14 days') THEN 'two-weeks-ago'
+          WHEN a."from"::date = ($1::date - INTERVAL '1 day') THEN 'day-back-1'
+          WHEN a."from"::date = ($1::date - INTERVAL '2 days') THEN 'day-back-2'
+          WHEN a."from"::date = ($1::date - INTERVAL '3 days') THEN 'day-back-3'
+          WHEN a."from"::date = ($1::date - INTERVAL '4 days') THEN 'day-back-4'
+          WHEN a."from"::date = ($1::date - INTERVAL '5 days') THEN 'day-back-5'
+          WHEN a."from"::date = ($1::date - INTERVAL '6 days') THEN 'day-back-6'
+        END AS group_key
+      FROM action a
+      INNER JOIN event e ON e.id = a.eventid
+      WHERE e.gameid = $2
+        AND a."from"::date IN (
+          $1::date - INTERVAL '7 days',
+          $1::date - INTERVAL '14 days',
+          $1::date - INTERVAL '1 day',
+          $1::date - INTERVAL '2 days',
+          $1::date - INTERVAL '3 days',
+          $1::date - INTERVAL '4 days',
+          $1::date - INTERVAL '5 days',
+          $1::date - INTERVAL '6 days'
+        )
+      ORDER BY a."from"::date DESC
     `;
 
-    const result = await db.query(selectSql, [gameId, dates, base.format('YYYY/MM/DD')]);
-    return c.json(result.rows);
+    const result = await db.query(selectSql, [selectedDate, gameId]);
+    const rows = result.rows;
+
+    const baseDate = dayjs(selectedDate);
+    const getDayName = (d) => VIETNAMESE_DAYS[d.day()];
+
+    const groupDefs = [
+      { key: 'last-week', daysBack: 7, title: (d) => `📅 ${getDayName(d)} (Tuần trước)`, badgeTag: '1 tuần trước' },
+      { key: 'two-weeks-ago', daysBack: 14, title: (d) => `📅 ${getDayName(d)} (2 tuần trước)`, badgeTag: '2 tuần trước' },
+      { key: 'day-back-1', daysBack: 1, title: (d) => `🗓️ ${getDayName(d)} (Hôm qua)`, badgeTag: '-1 ngày' },
+      { key: 'day-back-2', daysBack: 2, title: (d) => `🗓️ ${getDayName(d)} (-2 ngày)`, badgeTag: '-2 ngày' },
+      { key: 'day-back-3', daysBack: 3, title: (d) => `🗓️ ${getDayName(d)} (-3 ngày)`, badgeTag: '-3 ngày' },
+      { key: 'day-back-4', daysBack: 4, title: (d) => `🗓️ ${getDayName(d)} (-4 ngày)`, badgeTag: '-4 ngày' },
+      { key: 'day-back-5', daysBack: 5, title: (d) => `🗓️ ${getDayName(d)} (-5 ngày)`, badgeTag: '-5 ngày' },
+      { key: 'day-back-6', daysBack: 6, title: (d) => `🗓️ ${getDayName(d)} (-6 ngày)`, badgeTag: '-6 ngày' }
+    ];
+
+    const responseGroups = [];
+
+    for (const def of groupDefs) {
+      const targetDate = baseDate.subtract(def.daysBack, 'day');
+      const matchingRows = rows.filter(r => r.group_key === def.key);
+
+      if (matchingRows.length > 0) {
+        responseGroups.push({
+          key: def.key,
+          title: def.title(targetDate),
+          dateStr: targetDate.format('DD/MM/YYYY'),
+          badgeTag: def.badgeTag,
+          events: matchingRows.map((r, idx) => ({
+            key: `suggest-${def.key}-${r.id}-${idx}`,
+            id: r.id.toString(),
+            name: r.name || '',
+            g_name: r.g_name || '',
+            gallery_id: r.gallery_id,
+            default_day: r.default_day,
+            post_slug: r.post_slug || '',
+            from: r.from,
+            to: r.to,
+            totalday: typeof r.totalday === 'number' ? r.totalday : parseInt(r.totalday || 0, 10)
+          }))
+        });
+      }
+    }
+
+    return c.json(responseGroups);
   } catch (err) {
-    console.error('Lỗi server:', err.message);
-    return c.json({ error: 'Internal Server Error' }, 500);
+    console.error('Lỗi server /get_event_suggest:', err.message);
+    return c.json({ error: 'Internal Server Error', details: err.message }, 500);
   }
 });
 
