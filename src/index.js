@@ -1355,21 +1355,7 @@ app.post('/check_item', async (c) => {
     });
 
     const data = await response.json();
-    const $ = cheerio.load(data.content_html, null, false);
-    const rows = $('table.table-cnd tbody tr');
-
-    const extractedRows = [];
-    rows.each((i, row) => {
-      const cells = $(row).find('td');
-      if (cells.length >= 6) {
-        extractedRows.push({
-          col0: $(cells[0]).text().trim(),
-          col1: $(cells[1]).text().trim(),
-          col4: $(cells[4]).text().trim(),
-          col5: $(cells[5]).text().trim()
-        });
-      }
-    });
+    const extractedRows = parseCndTableRows(data.content_html);
 
     const resultData = [];
     for (let index = 0; index < checkData.length; index++) {
@@ -1518,28 +1504,8 @@ app.post('/search-gallery', async (c) => {
     const textData = await response.text();
     const data = JSON.parse(textData);
 
-    const $ = cheerio.load(data.content_html);
-    const rows = $('table.view-data tbody tr');
-    const matchedRows = [];
-
-    rows.each((i, row) => {
-      const link = $(row).find('td a.vo-permalink-url');
-      const cells = $(row).find('td');
-
-      if (
-        (search_keyword || '') === '' ||
-        $(cells[0]).text().toLowerCase().includes(search_keyword.toLowerCase()) ||
-        $(cells[2]).text().toLowerCase().includes(search_keyword.toLowerCase())
-      ) {
-        matchedRows.push({
-          title: $(cells[0]).text(),
-          href: link.attr('href'),
-          sub: $(cells[2]).text(),
-        });
-      }
-    });
-
-    return c.json(Object.values(matchedRows));
+    const matchedRows = parseSearchGalleryRows(data.content_html, search_keyword);
+    return c.json(matchedRows);
   } catch (err) {
     console.error("❌ Error ", err.message);
     return c.json({ error: err.message }, 500);
