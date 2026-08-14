@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import { Pool } from '@neondatabase/serverless';
+import { Pool, neon } from '@neondatabase/serverless';
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat.js';
 
@@ -10,6 +10,14 @@ const app = new Hono();
 
 // Enable CORS
 app.use('*', cors());
+
+// Global Hono Error Handler to prevent Cloudflare Error 1101 crashes
+app.onError((err, c) => {
+  console.error("❌ Worker Exception:", err.message);
+  return c.json({
+    error: err.message || "Internal Worker Error"
+  }, 500);
+});
 
 // Ultra-fast lightweight HTML table parsers to eliminate Cheerio CPU/RAM overhead
 function parseCndTableRows(html) {
@@ -150,16 +158,29 @@ async function saveStoredCookies(c, dataStr) {
   }
 }
 
-let cachedPool = null;
-let cachedConnectionString = null;
-
 function getDb(c) {
-  const connectionString = c.env?.DATABASE_URL || process.env.DATABASE_URL;
-  if (!cachedPool || cachedConnectionString !== connectionString) {
-    cachedPool = new Pool({ connectionString });
-    cachedConnectionString = connectionString;
+  const connectionString = c.env?.DATABASE_URL || (typeof process !== 'undefined' ? process.env?.DATABASE_URL : undefined);
+  if (!connectionString) {
+    throw new Error("DATABASE_URL environment variable is missing or empty. Please set DATABASE_URL in Cloudflare Secrets.");
   }
-  return cachedPool;
+
+  return {
+    async query(queryText, params = []) {
+      const sql = neon(connectionString);
+      const result = await sql(queryText, params);
+      return { rows: Array.isArray(result) ? result : [] };
+    },
+    async connect() {
+      return {
+        async query(queryText, params = []) {
+          const sql = neon(connectionString);
+          const result = await sql(queryText, params);
+          return { rows: Array.isArray(result) ? result : [] };
+        },
+        release() {}
+      };
+    }
+  };
 }
 
 function getGoogleScriptUrl(c) {
@@ -717,8 +738,8 @@ app.post('/upload', async (c) => {
 
 // GET /events
 app.get('/events', async (c) => {
-  const db = getDb(c);
   try {
+    const db = getDb(c);
     const sql = `
       SELECT event.*, games.name AS "gameName"
       FROM event
@@ -727,21 +748,21 @@ app.get('/events', async (c) => {
     const resDb = await db.query(sql, []);
     return c.json(resDb.rows);
   } catch (err) {
-    console.error('❌ DB error:', err);
-    return c.json({ error: 'Database error' }, 500);
+    console.error('❌ DB error in /events:', err);
+    return c.json({ error: `Database error: ${err.message}` }, 500);
   }
 });
 
 // GET /listGame
 app.get('/listGame', async (c) => {
-  const db = getDb(c);
   try {
+    const db = getDb(c);
     const sql = `SELECT * from games`;
     const resDb = await db.query(sql, []);
     return c.json(resDb.rows);
   } catch (err) {
-    console.error('❌ DB error:', err);
-    return c.json({ error: 'Database error' }, 500);
+    console.error('❌ DB error in /listGame:', err);
+    return c.json({ error: `Database error: ${err.message}` }, 500);
   }
 });
 
