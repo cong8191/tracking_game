@@ -3,7 +3,6 @@ import { cors } from 'hono/cors';
 import { Pool } from '@neondatabase/serverless';
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat.js';
-import * as cheerio from 'cheerio';
 
 dayjs.extend(customParseFormat);
 
@@ -11,6 +10,60 @@ const app = new Hono();
 
 // Enable CORS
 app.use('*', cors());
+
+// Ultra-fast lightweight HTML table parsers to eliminate Cheerio CPU/RAM overhead
+function parseCndTableRows(html) {
+  const rows = [];
+  if (!html || typeof html !== 'string') return rows;
+
+  const trMatches = html.match(/<tr[^>]*>[\s\S]*?<\/tr>/gi);
+  if (!trMatches) return rows;
+
+  for (let i = 0; i < trMatches.length; i++) {
+    const tr = trMatches[i];
+    const tdMatches = tr.match(/<td[^>]*>[\s\S]*?<\/td>/gi);
+    if (tdMatches && tdMatches.length >= 6) {
+      const col0 = tdMatches[0].replace(/<[^>]+>/g, '').trim();
+      const col1 = tdMatches[1].replace(/<[^>]+>/g, '').trim();
+      const col4 = tdMatches[4].replace(/<[^>]+>/g, '').trim();
+      const col5 = tdMatches[5].replace(/<[^>]+>/g, '').trim();
+
+      rows.push({ col0, col1, col4, col5 });
+    }
+  }
+  return rows;
+}
+
+function parseSearchGalleryRows(html, searchKeyword) {
+  const matched = [];
+  if (!html || typeof html !== 'string') return matched;
+
+  const trMatches = html.match(/<tr[^>]*>[\s\S]*?<\/tr>/gi);
+  if (!trMatches) return matched;
+
+  const kw = (searchKeyword || '').toLowerCase().trim();
+
+  for (let i = 0; i < trMatches.length; i++) {
+    const tr = trMatches[i];
+    const tdMatches = tr.match(/<td[^>]*>[\s\S]*?<\/td>/gi);
+    if (tdMatches && tdMatches.length >= 3) {
+      const col0Text = tdMatches[0].replace(/<[^>]+>/g, '').trim();
+      const col2Text = tdMatches[2].replace(/<[^>]+>/g, '').trim();
+
+      const hrefMatch = tdMatches[0].match(/href=["']([^"']+)["']/i) || tr.match(/href=["']([^"']+)["']/i);
+      const href = hrefMatch ? hrefMatch[1] : '';
+
+      if (!kw || col0Text.toLowerCase().includes(kw) || col2Text.toLowerCase().includes(kw)) {
+        matched.push({
+          title: col0Text,
+          href: href,
+          sub: col2Text
+        });
+      }
+    }
+  }
+  return matched;
+}
 
 // Default Google Script URL fallback
 const GOOGLE_SCRIPT_URL_DEFAULT = "https://script.google.com/macros/s/AKfycbwzIlzn5gfKE38-mAGx1W7VCPfCu78nYDEnPmb6aUPVRl_dWALFthGYHFYbCSqyB0WLYw/exec";
@@ -97,24 +150,35 @@ async function saveStoredCookies(c, dataStr) {
   }
 }
 
+let cachedPool = null;
+let cachedConnectionString = null;
+
 function getDb(c) {
   const connectionString = c.env?.DATABASE_URL || process.env.DATABASE_URL;
-  return new Pool({ connectionString });
+  if (!cachedPool || cachedConnectionString !== connectionString) {
+    cachedPool = new Pool({ connectionString });
+    cachedConnectionString = connectionString;
+  }
+  return cachedPool;
 }
 
 function getGoogleScriptUrl(c) {
   return c.env?.GOOGLE_SCRIPT_URL || GOOGLE_SCRIPT_URL_DEFAULT;
 }
 
-// Helpers
+// Helpers with in-memory caching
+const gameCache = new Map();
 async function getGameByIdAsync(db, gameId) {
+  if (gameCache.has(gameId)) return gameCache.get(gameId);
   const resDb = await db.query("SELECT * from games WHERE id = $1", [gameId]);
   if (!resDb.rows[0]) return null;
   const row = resDb.rows[0];
-  return {
+  const result = {
     ...row,
     tagId: row.tagId || row.tagid
   };
+  gameCache.set(gameId, result);
+  return result;
 }
 
 async function getEventByIdAsync(db, id) {
@@ -240,7 +304,7 @@ const fetchGalleryInfo = async (c, galleryName, gameId, gameName = '', retList =
   const game = await getGameByIdAsync(db, gameId);
   const tagId = game ? (game.tagId || game.tagid) : '';
 
-  const obj = JSON.parse('{"limit": 10000000, "init": 0, "page": 0, "type": [], "status": [], "category": [], "non_category": [], "tag37": [], "tag38": [], "tag28": [], "tag34": [], "tag18": ["768367"], "tag35": [], "tag21": [], "tag29": [], "tag36": [], "tag22": [], "tag26": [], "tag45": [], "tag42": [], "tag9": [], "tag32": [], "tag4": [], "tag1": [], "tag2": [], "tag3": [], "tag10": [], "tag12": [], "tag7": [], "tag8": [], "tag11": [], "tag43": [], "tag13": [], "search": ""}');
+  const obj = JSON.parse('{"limit": 500, "init": 0, "page": 0, "type": [], "status": [], "category": [], "non_category": [], "tag37": [], "tag38": [], "tag28": [], "tag34": [], "tag18": ["768367"], "tag35": [], "tag21": [], "tag29": [], "tag36": [], "tag22": [], "tag26": [], "tag45": [], "tag42": [], "tag9": [], "tag32": [], "tag4": [], "tag1": [], "tag2": [], "tag3": [], "tag10": [], "tag12": [], "tag7": [], "tag8": [], "tag11": [], "tag43": [], "tag13": [], "search": ""}');
   obj.tag18 = [tagId.toString()];
   obj.search = galleryName;
 
@@ -267,6 +331,15 @@ const fetchGalleryInfo = async (c, galleryName, gameId, gameName = '', retList =
   }
 
   return contentList.filter(item => `${galleryName} - ${gameName}`.toLowerCase().includes(item.name.toLowerCase()));
+};
+
+const galleryInfoCache = new Map();
+const fetchGalleryInfoCached = async (c, galleryName, gameId, gameName = '', retList = false) => {
+  const cacheKey = `${galleryName}_${gameId}_${gameName}_${retList}`;
+  if (galleryInfoCache.has(cacheKey)) return galleryInfoCache.get(cacheKey);
+  const res = await fetchGalleryInfo(c, galleryName, gameId, gameName, retList);
+  galleryInfoCache.set(cacheKey, res);
+  return res;
 };
 
 // --- ROUTES ---
@@ -1162,10 +1235,10 @@ app.post('/show-data', async (c) => {
     }
 
     const currentDate = dayjs();
-    const obj = JSON.parse('{"date_range": ["2025-12-23", "2026-01-21"], "search": "", "view": ["activity"], "tag26": ["136034"], "limit": 4000, "tag18": ["684110"], "init": 0, "page": 0, "category2": [], "tag37": [], "tag38": [], "tag28": []}');
+    const obj = JSON.parse('{"date_range": ["2025-12-23", "2026-01-21"], "search": "", "view": ["activity"], "tag26": ["136034"], "limit": 500, "tag18": ["684110"], "init": 0, "page": 0, "category2": [], "tag37": [], "tag38": [], "tag28": []}');
     obj.date_range = [startDate, currentDate.add(30, "day").format('YYYY-MM-DD')];
     obj.tag18 = [tagId.toString()];
-    obj.limit = (Math.floor(Math.random() * (5000 - 100 + 1)) + 100).toString();
+    obj.limit = "500";
 
     const form = new FormData();
     form.append('csrf', datas.csrf);
@@ -1263,10 +1336,10 @@ app.post('/check_item', async (c) => {
     const currentDate = dayjs();
     const prevDate = currentDate.subtract(30, 'day');
 
-    const obj = JSON.parse('{"date_range": ["2025-12-23", "2026-01-21"], "search": "", "view": ["activity"], "tag26": ["136034"], "limit": 4000, "tag18": ["684110"], "init": 0, "page": 0, "category2": [], "tag37": [], "tag38": [], "tag28": []}');
+    const obj = JSON.parse('{"date_range": ["2025-12-23", "2026-01-21"], "search": "", "view": ["activity"], "tag26": ["136034"], "limit": 300, "tag18": ["684110"], "init": 0, "page": 0, "category2": [], "tag37": [], "tag38": [], "tag28": []}');
     obj.date_range = [prevDate.format('YYYY-MM-DD'), currentDate.add(30, "day").format('YYYY-MM-DD')];
     obj.tag18 = [tagId.toString()];
-    obj.limit = (Math.floor(Math.random() * (5000 - 100 + 1)) + 100).toString();
+    obj.limit = "300";
 
     const form = new FormData();
     form.append('csrf', datas.csrf);
@@ -1282,8 +1355,21 @@ app.post('/check_item', async (c) => {
     });
 
     const data = await response.json();
-    const $ = cheerio.load(data.content_html);
+    const $ = cheerio.load(data.content_html, null, false);
     const rows = $('table.table-cnd tbody tr');
+
+    const extractedRows = [];
+    rows.each((i, row) => {
+      const cells = $(row).find('td');
+      if (cells.length >= 6) {
+        extractedRows.push({
+          col0: $(cells[0]).text().trim(),
+          col1: $(cells[1]).text().trim(),
+          col4: $(cells[4]).text().trim(),
+          col5: $(cells[5]).text().trim()
+        });
+      }
+    });
 
     const resultData = [];
     for (let index = 0; index < checkData.length; index++) {
@@ -1296,7 +1382,7 @@ app.post('/check_item', async (c) => {
 
       if (!parsedData || !parsedData.startDateObj || !parsedData.eventName) {
         if (parsedData?.eventName !== '') {
-          const result = await fetchGalleryInfo(c, `${parsedData.eventName} - ${game.app_name}`, gameId, true);
+          const result = await fetchGalleryInfoCached(c, `${parsedData.eventName} - ${game.app_name}`, gameId, true);
           for (let idx = 0; idx < result.length; idx++) {
             const element = result[idx];
             ret.details.push({
@@ -1311,21 +1397,24 @@ app.post('/check_item', async (c) => {
         }
         cnt = 1;
       } else {
-        rows.each((i, row) => {
-          const cells = $(row).find('td');
-          if ($(cells[0])?.text() === parsedData.startDateObj.format('MMMM D, YYYY')
-            && $(cells[1])?.text() === parsedData.endDateObj.format('MMMM D, YYYY')
-            && $(cells[4])?.text().toLowerCase().trim().includes(parsedData.eventName.toLowerCase().trim())
-            && (parsedData.subEvent || '').toLowerCase().trim() === $(cells[5])?.text().toLowerCase().trim()
+        const startText = parsedData.startDateObj.format('MMMM D, YYYY');
+        const endText = parsedData.endDateObj.format('MMMM D, YYYY');
+        const eventNameLower = parsedData.eventName.toLowerCase().trim();
+        const subEventLower = (parsedData.subEvent || '').toLowerCase().trim();
+
+        for (const rowData of extractedRows) {
+          if (rowData.col0 === startText
+            && rowData.col1 === endText
+            && rowData.col4.toLowerCase().includes(eventNameLower)
+            && rowData.col5.toLowerCase() === subEventLower
           ) {
             cnt++;
-          } else if (cnt > 1) {
-            return false;
+            if (cnt > 1) break;
           }
-        });
+        }
 
         ret.data = parsedData;
-        const result = await fetchGalleryInfo(c, parsedData.eventName, gameId, game.app_name, true);
+        const result = await fetchGalleryInfoCached(c, parsedData.eventName, gameId, game.app_name, true);
 
         for (let idx = 0; idx < result.length; idx++) {
           const element = result[idx];
@@ -1343,19 +1432,19 @@ app.post('/check_item', async (c) => {
       resultData.push(ret);
     }
 
+    const selectedDateStr = dayjs(selectedDate).format('MMMM D, YYYY');
     const daysevent = [];
-    rows.each((i, row) => {
-      const cells = $(row).find('td');
-      if ($(cells[0])?.text() === dayjs(selectedDate).format('MMMM D, YYYY')) {
+    for (const rowData of extractedRows) {
+      if (rowData.col0 === selectedDateStr) {
         daysevent.push({
           start: dayjs(selectedDate).date(),
-          to: dayjs($(cells[1])?.text(), 'MMMM D, YYYY').date(),
-          eventName: $(cells[4])?.text().split(' - ')[0],
-          subEvent: $(cells[5])?.text(),
-          appName: $(cells[4])?.text()
+          to: dayjs(rowData.col1, 'MMMM D, YYYY').date(),
+          eventName: rowData.col4.split(' - ')[0],
+          subEvent: rowData.col5,
+          appName: rowData.col4
         });
       }
-    });
+    }
 
     const excludes = daysevent.filter(item => {
       const matched = resultData.find(r => r.data?.eventName.toLowerCase().trim() === item.eventName.toLowerCase().trim() && r.data?.subEvent.toLowerCase().trim() === item.subEvent.toLowerCase().trim());
@@ -1368,7 +1457,7 @@ app.post('/check_item', async (c) => {
         details: []
       };
 
-      const result = await fetchGalleryInfo(c, item.appName, gameId);
+      const result = await fetchGalleryInfoCached(c, item.appName, gameId);
       if (result?.id) {
         ret.details.push({
           url: result.permalink,
