@@ -1009,6 +1009,7 @@ app.post('/get_event_suggest', async (c) => {
         e.gallery_id,
         e.default_day,
         e.post_slug,
+        a."from"::date AS raw_from,
         TO_CHAR(a."from"::date, 'YYYY/MM/DD') AS "from",
         TO_CHAR(a."to"::date, 'YYYY/MM/DD') AS "to",
         (a."to"::date - a."from"::date) AS totalday,
@@ -1035,7 +1036,7 @@ app.post('/get_event_suggest', async (c) => {
           $1::date - INTERVAL '5 days',
           $1::date - INTERVAL '6 days'
         )
-      ORDER BY a."from"::date DESC
+      ORDER BY raw_from DESC
     `;
 
     const result = await db.query(selectSql, [selectedDate, gameId]);
