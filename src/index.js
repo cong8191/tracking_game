@@ -1000,6 +1000,11 @@ app.post('/get_event_suggest', async (c) => {
   }
 
   try {
+    const cleanDateStr = selectedDate ? selectedDate.toString().replace(/\//g, '-') : '';
+    const baseDate = dayjs(cleanDateStr);
+    const formattedDate = baseDate.isValid() ? baseDate.format('YYYY-MM-DD') : selectedDate;
+    const parsedGameId = parseInt(gameId, 10);
+
     const db = getDb(c);
     const selectSql = `
       SELECT DISTINCT 
@@ -1009,24 +1014,24 @@ app.post('/get_event_suggest', async (c) => {
         e.gallery_id,
         e.default_day,
         e.post_slug,
-        a."from"::date AS raw_from,
-        TO_CHAR(a."from"::date, 'YYYY/MM/DD') AS "from",
-        TO_CHAR(a."to"::date, 'YYYY/MM/DD') AS "to",
-        (a."to"::date - a."from"::date) AS totalday,
+        COALESCE(NULLIF(a."from", ''), a.date)::date AS raw_from,
+        TO_CHAR(COALESCE(NULLIF(a."from", ''), a.date)::date, 'YYYY/MM/DD') AS "from",
+        TO_CHAR(COALESCE(NULLIF(a."to", ''), a.date)::date, 'YYYY/MM/DD') AS "to",
+        GREATEST(0, (COALESCE(NULLIF(a."to", ''), a.date)::date - COALESCE(NULLIF(a."from", ''), a.date)::date)) AS totalday,
         CASE 
-          WHEN a."from"::date = ($1::date - INTERVAL '7 days') THEN 'last-week'
-          WHEN a."from"::date = ($1::date - INTERVAL '14 days') THEN 'two-weeks-ago'
-          WHEN a."from"::date = ($1::date - INTERVAL '1 day') THEN 'day-back-1'
-          WHEN a."from"::date = ($1::date - INTERVAL '2 days') THEN 'day-back-2'
-          WHEN a."from"::date = ($1::date - INTERVAL '3 days') THEN 'day-back-3'
-          WHEN a."from"::date = ($1::date - INTERVAL '4 days') THEN 'day-back-4'
-          WHEN a."from"::date = ($1::date - INTERVAL '5 days') THEN 'day-back-5'
-          WHEN a."from"::date = ($1::date - INTERVAL '6 days') THEN 'day-back-6'
+          WHEN COALESCE(NULLIF(a."from", ''), a.date)::date = ($1::date - INTERVAL '7 days') THEN 'last-week'
+          WHEN COALESCE(NULLIF(a."from", ''), a.date)::date = ($1::date - INTERVAL '14 days') THEN 'two-weeks-ago'
+          WHEN COALESCE(NULLIF(a."from", ''), a.date)::date = ($1::date - INTERVAL '1 day') THEN 'day-back-1'
+          WHEN COALESCE(NULLIF(a."from", ''), a.date)::date = ($1::date - INTERVAL '2 days') THEN 'day-back-2'
+          WHEN COALESCE(NULLIF(a."from", ''), a.date)::date = ($1::date - INTERVAL '3 days') THEN 'day-back-3'
+          WHEN COALESCE(NULLIF(a."from", ''), a.date)::date = ($1::date - INTERVAL '4 days') THEN 'day-back-4'
+          WHEN COALESCE(NULLIF(a."from", ''), a.date)::date = ($1::date - INTERVAL '5 days') THEN 'day-back-5'
+          WHEN COALESCE(NULLIF(a."from", ''), a.date)::date = ($1::date - INTERVAL '6 days') THEN 'day-back-6'
         END AS group_key
       FROM action a
       INNER JOIN event e ON e.id = a.eventid
       WHERE e.gameid = $2
-        AND a."from"::date IN (
+        AND COALESCE(NULLIF(a."from", ''), a.date)::date IN (
           $1::date - INTERVAL '7 days',
           $1::date - INTERVAL '14 days',
           $1::date - INTERVAL '1 day',
@@ -1039,10 +1044,9 @@ app.post('/get_event_suggest', async (c) => {
       ORDER BY raw_from DESC
     `;
 
-    const result = await db.query(selectSql, [selectedDate, gameId]);
+    const result = await db.query(selectSql, [formattedDate, parsedGameId]);
     const rows = result.rows;
 
-    const baseDate = dayjs(selectedDate);
     const getDayName = (d) => VIETNAMESE_DAYS[d.day()];
 
     const groupDefs = [
