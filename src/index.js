@@ -76,6 +76,92 @@ function parseSearchGalleryRows(html, searchKeyword) {
 // Default Google Script URL fallback
 const GOOGLE_SCRIPT_URL_DEFAULT = "https://script.google.com/macros/s/AKfycbwzIlzn5gfKE38-mAGx1W7VCPfCu78nYDEnPmb6aUPVRl_dWALFthGYHFYbCSqyB0WLYw/exec";
 
+// Browser User-Agent and Full Headers for LiquidAndGrit to pass Cloudflare WAF
+const BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+function getLgHeaders(cookies, customHeaders = {}) {
+  const headers = {
+    'User-Agent': BROWSER_USER_AGENT,
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'en-US,en;q=0.9,vi;q=0.8',
+    'Origin': 'https://my.liquidandgrit.com',
+    'Referer': 'https://my.liquidandgrit.com/',
+    'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+    'Sec-Ch-Ua-Mobile': '?0',
+    'Sec-Ch-Ua-Platform': '"Windows"',
+    'Sec-Fetch-Dest': 'empty',
+    'Sec-Fetch-Mode': 'cors',
+    'Sec-Fetch-Site': 'same-origin',
+    ...customHeaders
+  };
+  if (cookies) {
+    headers['Cookie'] = cookies;
+  }
+  return headers;
+}
+
+// Auto-retrying fetch with full headers and backoff for Cloudflare 521 / cold connection handling
+async function fetchLg(url, options = {}, cookies = '', retries = 2) {
+  const headers = getLgHeaders(cookies, options.headers || {});
+  const reqOptions = { ...options, headers };
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const response = await fetch(url, reqOptions);
+      if ([521, 502, 503, 504].includes(response.status) && attempt < retries) {
+        console.warn(`⚠️ LiquidAndGrit HTTP ${response.status} on attempt ${attempt + 1}. Retrying in 300ms...`);
+        await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+        continue;
+      }
+      return response;
+    } catch (err) {
+      if (attempt < retries) {
+        console.warn(`⚠️ LiquidAndGrit network error on attempt ${attempt + 1}: ${err.message}. Retrying in 300ms...`);
+        await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+// Auto-retrying JSON fetch with safe parsing
+async function fetchLgJson(url, options = {}, cookies = '', retries = 2) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const response = await fetchLg(url, options, cookies, 0);
+      const text = await response.text();
+
+      if ([521, 502, 503, 504].includes(response.status) || text.includes('error code: 521') || text.includes('502 Bad Gateway') || text.includes('503 Service Unavailable')) {
+        if (attempt < retries) {
+          console.warn(`⚠️ Upstream error (HTTP ${response.status}) on attempt ${attempt + 1}. Retrying in 300ms...`);
+          await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+          continue;
+        }
+        throw new Error(`Server Liquid&Grit tạm thời bận (HTTP ${response.status}). Vui lòng thử lại.`);
+      }
+
+      try {
+        return JSON.parse(text);
+      } catch (parseErr) {
+        if (attempt < retries) {
+          console.warn(`⚠️ Non-JSON response on attempt ${attempt + 1}. Retrying in 300ms...`);
+          await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+          continue;
+        }
+        if (response.ok) return { message: text };
+        throw new Error(`Server Liquid&Grit trả về dữ liệu không hợp lệ (HTTP ${response.status}): ${text.slice(0, 150)}`);
+      }
+    } catch (err) {
+      if (attempt < retries) {
+        await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 // In-memory RAM cache for cookies to avoid hitting DB/KV on every request
 let memoryCookies = null;
 
@@ -335,15 +421,11 @@ const fetchGalleryInfo = async (c, galleryName, gameId, gameName = '', retList =
   form.append('vo-action', '');
   form.append('filter_conditions', JSON.stringify(obj));
 
-  const response = await fetch('https://my.liquidandgrit.com/action/admin/cms/blog/post-cnd', {
+  const responseData = await fetchLgJson('https://my.liquidandgrit.com/action/admin/cms/blog/post-cnd', {
     method: 'POST',
-    headers: {
-      Cookie: datas.cookies
-    },
     body: form
-  });
+  }, datas.cookies);
 
-  const responseData = await response.json();
   const contentList = responseData && responseData.content ? responseData.content : [];
 
   if (!retList) {
@@ -389,16 +471,10 @@ app.get('/readDataCookies', async (c) => {
     form.append('csrf', datas.csrf);
     form.append('id', '1');
 
-    const response = await fetch('https://my.liquidandgrit.com/action/admin/cms/blog/manage', {
+    const data = await fetchLgJson('https://my.liquidandgrit.com/action/admin/cms/blog/manage', {
       method: 'POST',
-      headers: {
-        Cookie: datas.cookies
-      },
       body: form
-    });
-
-    const text = await response.text();
-    const data = JSON.parse(text);
+    }, datas.cookies);
 
     if (!data.blogData) {
       return c.json({ success: true, result: '' });
@@ -524,13 +600,10 @@ app.post('/delete_file', async (c) => {
     form.append('id', gallery_id);
     form.append('file', JSON.stringify(file));
 
-    await fetch('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', {
+    await fetchLg('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', {
       method: 'POST',
-      headers: {
-        Cookie: datas.cookies
-      },
       body: form
-    });
+    }, datas.cookies);
 
     return c.json({ success: true, result: "OK" });
   } catch (error) {
@@ -554,15 +627,11 @@ app.post('/getInfo', async (c) => {
     form.append('csrf', datas.csrf);
     form.append('id', event_id);
 
-    const response = await fetch('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', {
+    const data = await fetchLgJson('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', {
       method: 'POST',
-      headers: {
-        Cookie: datas.cookies
-      },
       body: form
-    });
+    }, datas.cookies);
 
-    const data = await response.json();
     return c.json({ success: true, result: data });
   } catch (err) {
     console.error("❌ Error getting info:", err.message);
@@ -594,12 +663,12 @@ app.post('/upload', async (c) => {
       }
       reqHeaders.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
-      const resUpload = await fetch('https://my.liquidandgrit.com/action/admin/cms/file-upload-v3', {
+      const resUpload = await fetchLg('https://my.liquidandgrit.com/action/admin/cms/file-upload-v3', {
         method: 'POST',
         headers: reqHeaders,
         body: c.req.raw.body,
         duplex: 'half'
-      });
+      }, datas.cookies);
 
       const resText = await resUpload.text();
       let uploadResult = null;
@@ -629,14 +698,10 @@ app.post('/upload', async (c) => {
         form2.append('id', galleryId);
         form2.append('file', JSON.stringify(uploadResult.file));
 
-        await fetch('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', {
+        await fetchLg('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', {
           method: 'POST',
-          headers: {
-            Cookie: datas.cookies,
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-          },
           body: form2
-        });
+        }, datas.cookies);
       }
 
       return c.json({ success: true, result: uploadResult || "OK" });
@@ -670,14 +735,10 @@ app.post('/upload', async (c) => {
       form.append('file', uploadedFile);
     }
 
-    const resUpload = await fetch('https://my.liquidandgrit.com/action/admin/cms/file-upload-v3', {
+    const resUpload = await fetchLg('https://my.liquidandgrit.com/action/admin/cms/file-upload-v3', {
       method: 'POST',
-      headers: {
-        Cookie: datas.cookies,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-      },
       body: form
-    });
+    }, datas.cookies);
 
     const resText = await resUpload.text();
     let uploadResult = null;
@@ -715,14 +776,10 @@ app.post('/upload', async (c) => {
       form2.append('id', body.id);
       form2.append('file', JSON.stringify(uploadResult.file));
 
-      const resEdit = await fetch('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', {
+      const resEdit = await fetchLg('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', {
         method: 'POST',
-        headers: {
-          Cookie: datas.cookies,
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        },
         body: form2
-      });
+      }, datas.cookies);
 
       if (!resEdit.ok) {
         console.error("Gallery edit update failed with status:", resEdit.status);
@@ -873,12 +930,10 @@ app.post('/createNewGallery', async (c) => {
     form.append('post[type]', 'gallery');
     form.append('vo-action', 'insert');
 
-    let response = await fetch('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', {
+    const data = await fetchLgJson('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', {
       method: 'POST',
-      headers: { Cookie: datas.cookies },
       body: form
-    });
-    const data = await response.json();
+    }, datas.cookies);
 
     const insertSql = `
       INSERT INTO event (gameid, name, gallery_id, "IsContent", post_slug)
@@ -895,11 +950,10 @@ app.post('/createNewGallery', async (c) => {
     form.append('type', 'gallery');
     form.append('vo-action', 'tag_group_relate_gallery');
 
-    await fetch('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', {
+    await fetchLg('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', {
       method: 'POST',
-      headers: { Cookie: datas.cookies },
       body: form
-    });
+    }, datas.cookies);
 
     const currentDate = dayjs();
     const pastDate = currentDate.subtract(7, 'hour');
@@ -918,11 +972,10 @@ app.post('/createNewGallery', async (c) => {
     form.append('post[publish][minute]', pastDate.format('mm'));
     form.append('post[publish][meridian]', pastDate.format('A'));
 
-    await fetch('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', {
+    await fetchLg('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', {
       method: 'POST',
-      headers: { Cookie: datas.cookies },
       body: form
-    });
+    }, datas.cookies);
 
     postSlug = data.post_slug;
 
@@ -1170,13 +1223,10 @@ app.post('/action', async (c) => {
       form.append('plugin', "event");
       form.append('cms_page_blog_gallery_id', event.gallery_id);
 
-      let response = await fetch('https://my.liquidandgrit.com/action/admin/cms/plugin', {
+      let data = await fetchLgJson('https://my.liquidandgrit.com/action/admin/cms/plugin', {
         method: 'POST',
-        headers: { Cookie: datas.cookies },
         body: form
-      });
-
-      let data = await response.json();
+      }, datas.cookies);
 
       form = new FormData();
       form.append('csrf', datas.csrf);
@@ -1188,12 +1238,10 @@ app.post('/action', async (c) => {
       form.append('order_index', data.events ? data.events.length : 0);
       form.append('cms_page_blog_gallery_id', event.gallery_id);
 
-      response = await fetch('https://my.liquidandgrit.com/action/admin/cms/plugin', {
+      data = await fetchLgJson('https://my.liquidandgrit.com/action/admin/cms/plugin', {
         method: 'POST',
-        headers: { Cookie: datas.cookies },
         body: form
-      });
-      data = await response.json();
+      }, datas.cookies);
 
       let strDate = '';
       if (from === to) {
@@ -1339,16 +1387,11 @@ app.post('/show-data', async (c) => {
     form.append('csrf', datas.csrf);
     form.append('plugin', 'event');
     form.append('action', 'searchItem');
-    form.append('vo-action', '');
-    form.append('filter_conditions', JSON.stringify(obj));
-
-    const response = await fetch('https://my.liquidandgrit.com/action/public/cms/plugin', {
+    const data = await fetchLgJson('https://my.liquidandgrit.com/action/public/cms/plugin', {
       method: 'POST',
-      headers: { Cookie: datas.cookies },
       body: form
-    });
+    }, datas.cookies);
 
-    const data = await response.json();
     return c.json({
       success: true,
       content_html: data.content_html
@@ -1374,12 +1417,10 @@ app.post('/vewImage', async (c) => {
     form.append('csrf', datas.csrf);
     form.append('id', event_id);
 
-    let response = await fetch('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', {
+    const data = await fetchLgJson('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', {
       method: 'POST',
-      headers: { Cookie: datas.cookies },
       body: form
-    });
-    const data = await response.json();
+    }, datas.cookies);
 
     if (!data.published_version) {
       return c.json({ error: "Chưa publish gallery" }, 500);
@@ -1392,13 +1433,11 @@ app.post('/vewImage', async (c) => {
     form.append('preview_mode', 'false');
     form.append('csrf', datas.csrf);
 
-    response = await fetch('https://my.liquidandgrit.com/action/public/cms/blog/get-gallery', {
+    const galleryRes = await fetchLgJson('https://my.liquidandgrit.com/action/public/cms/blog/get-gallery', {
       method: 'POST',
-      headers: { Cookie: datas.cookies },
       body: form
-    });
+    }, datas.cookies);
 
-    const galleryRes = await response.json();
     return c.json({ success: true, result: galleryRes });
   } catch (err) {
     console.error("❌ Error view image:", err.message);
@@ -1443,13 +1482,10 @@ app.post('/check_item', async (c) => {
     form.append('vo-action', '');
     form.append('filter_conditions', JSON.stringify(obj));
 
-    const response = await fetch('https://my.liquidandgrit.com/action/public/cms/plugin', {
+    const data = await fetchLgJson('https://my.liquidandgrit.com/action/public/cms/plugin', {
       method: 'POST',
-      headers: { Cookie: datas.cookies },
       body: form
-    });
-
-    const data = await response.json();
+    }, datas.cookies);
     const extractedRows = parseCndTableRows(data.content_html);
 
     const resultData = [];
@@ -1590,14 +1626,10 @@ app.post('/search-gallery', async (c) => {
     form.append('vo-action', '');
     form.append('filter_conditions', JSON.stringify(obj));
 
-    const response = await fetch('https://my.liquidandgrit.com/action/public/cms/blog/cnd', {
+    const data = await fetchLgJson('https://my.liquidandgrit.com/action/public/cms/blog/cnd', {
       method: 'POST',
-      headers: { Cookie: datas.cookies },
       body: form
-    });
-
-    const textData = await response.text();
-    const data = JSON.parse(textData);
+    }, datas.cookies);
 
     const matchedRows = parseSearchGalleryRows(data.content_html, search_keyword);
     return c.json(matchedRows);
