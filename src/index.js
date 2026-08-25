@@ -1387,6 +1387,9 @@ app.post('/show-data', async (c) => {
     form.append('csrf', datas.csrf);
     form.append('plugin', 'event');
     form.append('action', 'searchItem');
+    form.append('vo-action', '');
+    form.append('filter_conditions', JSON.stringify(obj));
+
     const data = await fetchLgJson('https://my.liquidandgrit.com/action/public/cms/plugin', {
       method: 'POST',
       body: form
