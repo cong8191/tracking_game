@@ -82,16 +82,8 @@ const BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKi
 function getLgHeaders(cookies, customHeaders = {}) {
   const headers = {
     'User-Agent': BROWSER_USER_AGENT,
-    'Accept': 'application/json, text/plain, */*',
-    'Accept-Language': 'en-US,en;q=0.9,vi;q=0.8',
-    'Origin': 'https://my.liquidandgrit.com',
-    'Referer': 'https://my.liquidandgrit.com/',
-    'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-    'Sec-Ch-Ua-Mobile': '?0',
-    'Sec-Ch-Ua-Platform': '"Windows"',
-    'Sec-Fetch-Dest': 'empty',
-    'Sec-Fetch-Mode': 'cors',
-    'Sec-Fetch-Site': 'same-origin',
+    'Accept': '*/*',
+    'Accept-Language': 'en-US,en;q=0.9',
     ...customHeaders
   };
   if (cookies) {
@@ -469,16 +461,23 @@ app.get('/readDataCookies', async (c) => {
 
     const form = new FormData();
     form.append('csrf', datas.csrf);
-    form.append('vo-action', 'get_unread_count');
-	
+    form.append('id', '1');
 
-    const data = await fetchLgJson('https://my.liquidandgrit.com/action/admin/cmn/inbox-cnd', {
-      method: 'POST',
-      body: form
-    }, datas.cookies);
+    try {
+      const data = await fetchLgJson('https://my.liquidandgrit.com/action/admin/cms/blog/manage', {
+        method: 'POST',
+        body: form
+      }, datas.cookies);
 
+      if (!data || !data.blogData) {
+        return c.json({ success: true, result: '' });
+      }
 
-    return c.json({ success: true, result: "OK" });
+      return c.json({ success: true, result: JSON.stringify(datas) });
+    } catch (apiErr) {
+      console.warn("⚠️ Không thể kiểm tra cookie với Liquid&Grit:", apiErr.message);
+      return c.json({ success: true, result: JSON.stringify(datas), warning: apiErr.message });
+    }
   } catch (err) {
     console.error("❌ loi doc data cookie:", err.message);
     return c.json({ error: err.message }, 500);
