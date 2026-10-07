@@ -470,6 +470,7 @@ app.get('/readDataCookies', async (c) => {
     const form = new FormData();
     form.append('csrf', datas.csrf);
     form.append('id', '1');
+	
 
     const data = await fetchLgJson('https://my.liquidandgrit.com/action/admin/cmn/inbox-cnd', {
       method: 'POST',
