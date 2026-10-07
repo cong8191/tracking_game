@@ -77,22 +77,30 @@ function parseSearchGalleryRows(html, searchKeyword) {
 const GOOGLE_SCRIPT_URL_DEFAULT = "https://script.google.com/macros/s/AKfycbwzIlzn5gfKE38-mAGx1W7VCPfCu78nYDEnPmb6aUPVRl_dWALFthGYHFYbCSqyB0WLYw/exec";
 
 // Browser User-Agent and Full Headers for LiquidAndGrit to pass Cloudflare WAF
+// Browser User-Agent and Full Headers for LiquidAndGrit to pass Cloudflare WAF & AWS ALB
 const BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+const RETRIABLE_STATUS_CODES = [460, 429, 500, 502, 503, 504, 520, 521, 522, 524];
 
 function getLgHeaders(cookies, customHeaders = {}) {
+  const cleanCookies = typeof cookies === 'string' ? cookies.replace(/[\r\n]+/g, '').trim() : cookies;
   const headers = {
     'User-Agent': BROWSER_USER_AGENT,
-    'Accept': '*/*',
+    'Accept': 'application/json, text/html, */*',
     'Accept-Language': 'en-US,en;q=0.9',
+    'Origin': 'https://my.liquidandgrit.com',
+    'Referer': 'https://my.liquidandgrit.com/',
+    'Sec-Fetch-Dest': 'empty',
+    'Sec-Fetch-Mode': 'cors',
+    'Sec-Fetch-Site': 'same-origin',
     ...customHeaders
   };
-  if (cookies) {
-    headers['Cookie'] = cookies;
+  if (cleanCookies) {
+    headers['Cookie'] = cleanCookies;
   }
   return headers;
 }
 
-// Auto-retrying fetch with full headers and backoff for Cloudflare 521 / cold connection handling
+// Auto-retrying fetch with full headers and backoff for Cloudflare / AWS ALB HTTP 460 & 521 errors
 async function fetchLg(url, options = {}, cookies = '', retries = 2) {
   const headers = getLgHeaders(cookies, options.headers || {});
   const reqOptions = { ...options, headers };
@@ -100,16 +108,16 @@ async function fetchLg(url, options = {}, cookies = '', retries = 2) {
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const response = await fetch(url, reqOptions);
-      if ([521, 502, 503, 504].includes(response.status) && attempt < retries) {
-        console.warn(`⚠️ LiquidAndGrit HTTP ${response.status} on attempt ${attempt + 1}. Retrying in 300ms...`);
-        await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+      if (RETRIABLE_STATUS_CODES.includes(response.status) && attempt < retries) {
+        console.warn(`⚠️ LiquidAndGrit HTTP ${response.status} on attempt ${attempt + 1}. Retrying in 400ms...`);
+        await new Promise(r => setTimeout(r, 400 * (attempt + 1)));
         continue;
       }
       return response;
     } catch (err) {
       if (attempt < retries) {
-        console.warn(`⚠️ LiquidAndGrit network error on attempt ${attempt + 1}: ${err.message}. Retrying in 300ms...`);
-        await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+        console.warn(`⚠️ LiquidAndGrit network error on attempt ${attempt + 1}: ${err.message}. Retrying in 400ms...`);
+        await new Promise(r => setTimeout(r, 400 * (attempt + 1)));
         continue;
       }
       throw err;
@@ -117,18 +125,27 @@ async function fetchLg(url, options = {}, cookies = '', retries = 2) {
   }
 }
 
-// Auto-retrying JSON fetch with safe parsing
+// Auto-retrying JSON fetch with safe parsing & HTTP 460 error handling
 async function fetchLgJson(url, options = {}, cookies = '', retries = 2) {
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const response = await fetchLg(url, options, cookies, 0);
       const text = await response.text();
 
-      if ([521, 502, 503, 504].includes(response.status) || text.includes('error code: 521') || text.includes('502 Bad Gateway') || text.includes('503 Service Unavailable')) {
+      const isErrorHtml = RETRIABLE_STATUS_CODES.includes(response.status) || 
+                          text.includes('error code: 460') || 
+                          text.includes('error code: 521') || 
+                          text.includes('502 Bad Gateway') || 
+                          text.includes('503 Service Unavailable');
+
+      if (isErrorHtml) {
         if (attempt < retries) {
-          console.warn(`⚠️ Upstream error (HTTP ${response.status}) on attempt ${attempt + 1}. Retrying in 300ms...`);
-          await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+          console.warn(`⚠️ Upstream error (HTTP ${response.status}) on attempt ${attempt + 1}. Retrying in 400ms...`);
+          await new Promise(r => setTimeout(r, 400 * (attempt + 1)));
           continue;
+        }
+        if (response.status === 460 || text.includes('error code: 460')) {
+          throw new Error(`Server Liquid&Grit ngắt kết nối (HTTP 460 - Connection Reset / ALB Timeout). Vui lòng thử lại.`);
         }
         throw new Error(`Server Liquid&Grit tạm thời bận (HTTP ${response.status}). Vui lòng thử lại.`);
       }
@@ -137,8 +154,8 @@ async function fetchLgJson(url, options = {}, cookies = '', retries = 2) {
         return JSON.parse(text);
       } catch (parseErr) {
         if (attempt < retries) {
-          console.warn(`⚠️ Non-JSON response on attempt ${attempt + 1}. Retrying in 300ms...`);
-          await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+          console.warn(`⚠️ Non-JSON response on attempt ${attempt + 1}. Retrying in 400ms...`);
+          await new Promise(r => setTimeout(r, 400 * (attempt + 1)));
           continue;
         }
         if (response.ok) return { message: text };
@@ -146,7 +163,7 @@ async function fetchLgJson(url, options = {}, cookies = '', retries = 2) {
       }
     } catch (err) {
       if (attempt < retries) {
-        await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+        await new Promise(r => setTimeout(r, 400 * (attempt + 1)));
         continue;
       }
       throw err;
