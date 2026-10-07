@@ -82,18 +82,20 @@ const BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKi
 const RETRIABLE_STATUS_CODES = [460, 429, 500, 502, 503, 504, 520, 521, 522, 524];
 
 function getLgHeaders(cookies, customHeaders = {}) {
-  const cleanCookies = typeof cookies === 'string' ? cookies.replace(/[\r\n]+/g, '').trim() : cookies;
+  let cleanCookies = '';
+  if (typeof cookies === 'string') {
+    cleanCookies = cookies.replace(/[\r\n]+/g, '').trim();
+  } else if (cookies && typeof cookies === 'object') {
+    cleanCookies = (cookies.cookies || cookies.cookie || '').toString().replace(/[\r\n]+/g, '').trim();
+  }
+
   const headers = {
     'User-Agent': BROWSER_USER_AGENT,
-    'Accept': 'application/json, text/html, */*',
+    'Accept': 'application/json, text/plain, */*',
     'Accept-Language': 'en-US,en;q=0.9',
-    'Origin': 'https://my.liquidandgrit.com',
-    'Referer': 'https://my.liquidandgrit.com/',
-    'Sec-Fetch-Dest': 'empty',
-    'Sec-Fetch-Mode': 'cors',
-    'Sec-Fetch-Site': 'same-origin',
     ...customHeaders
   };
+
   if (cleanCookies) {
     headers['Cookie'] = cleanCookies;
   }
