@@ -461,19 +461,16 @@ app.get('/readDataCookies', async (c) => {
 
     const form = new FormData();
     form.append('csrf', datas.csrf);
-    form.append('id', '1');
+    form.append('vo-action', 'get_unread_count');
 
     try {
-      const data = await fetchLgJson('https://my.liquidandgrit.com/action/admin/cms/blog/manage', {
+      const data = await fetchLgJson('https://my.liquidandgrit.com/action/admin/cmn/inbox-cnd', {
         method: 'POST',
         body: form
       }, datas.cookies);
 
-      if (!data || !data.blogData) {
-        return c.json({ success: true, result: '' });
-      }
 
-      return c.json({ success: true, result: JSON.stringify(datas) });
+      return c.json({ success: true, result: "0k" });
     } catch (apiErr) {
       console.warn("⚠️ Không thể kiểm tra cookie với Liquid&Grit:", apiErr.message);
       return c.json({ success: true, result: JSON.stringify(datas), warning: apiErr.message });
