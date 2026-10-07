@@ -89,17 +89,27 @@ function getLgHeaders(cookies, customHeaders = {}) {
     cleanCookies = (cookies.cookies || cookies.cookie || '').toString().replace(/[\r\n]+/g, '').trim();
   }
 
-  const headers = {
+  const finalHeaders = {
     'User-Agent': BROWSER_USER_AGENT,
     'Accept': 'application/json, text/plain, */*',
-    'Accept-Language': 'en-US,en;q=0.9',
-    ...customHeaders
+    'Accept-Language': 'en-US,en;q=0.9'
   };
 
-  if (cleanCookies) {
-    headers['Cookie'] = cleanCookies;
+  if (customHeaders) {
+    if (typeof customHeaders.entries === 'function') {
+      for (const [key, val] of customHeaders.entries()) {
+        finalHeaders[key] = val;
+      }
+    } else if (typeof customHeaders === 'object') {
+      Object.assign(finalHeaders, customHeaders);
+    }
   }
-  return headers;
+
+  if (cleanCookies && !finalHeaders['Cookie'] && !finalHeaders['cookie']) {
+    finalHeaders['Cookie'] = cleanCookies;
+  }
+
+  return finalHeaders;
 }
 
 // Auto-retrying fetch with full headers and backoff for Cloudflare / AWS ALB HTTP 460 & 521 errors
