@@ -469,7 +469,7 @@ app.get('/readDataCookies', async (c) => {
 
     const form = new FormData();
     form.append('csrf', datas.csrf);
-    form.append('id', '1');
+    form.append('vo-action', 'get_unread_count');
 	
 
     const data = await fetchLgJson('https://my.liquidandgrit.com/action/admin/cmn/inbox-cnd', {
@@ -477,9 +477,6 @@ app.get('/readDataCookies', async (c) => {
       body: form
     }, datas.cookies);
 
-    if (!data.blogData) {
-      return c.json({ success: true, result: '' });
-    }
 
     return c.json({ success: true, result: JSON.stringify(datas) });
   } catch (err) {
