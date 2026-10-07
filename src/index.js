@@ -478,7 +478,7 @@ app.get('/readDataCookies', async (c) => {
     }, datas.cookies);
 
 
-    return c.json({ success: true, result: JSON.stringify(datas) });
+    return c.json({ success: true, result: "OK" });
   } catch (err) {
     console.error("❌ loi doc data cookie:", err.message);
     return c.json({ error: err.message }, 500);
