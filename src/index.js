@@ -1461,7 +1461,7 @@ app.post('/show-data', async (c) => {
     obj.tag18 = [tagId.toString()];
     obj.limit = "500";
 
-    const form = new FormData();
+    const form = new URLSearchParams();
     form.append('csrf', datas.csrf);
     form.append('plugin', 'event');
     form.append('action', 'searchItem');
@@ -1475,8 +1475,7 @@ app.post('/show-data', async (c) => {
 
     let response = await axios.post('https://my.liquidandgrit.com/action/public/cms/plugin', form, {
       headers: {
-        Cookie: datas.cookies,
-        "Content-Type": "text/html; charset=UTF-8",
+        Cookie: datas.cookies
       },
       responseType: "text"
     });
