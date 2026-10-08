@@ -1468,10 +1468,20 @@ app.post('/show-data', async (c) => {
     form.append('vo-action', '');
     form.append('filter_conditions', JSON.stringify(obj));
 
-    const data = await fetchLgJson('https://my.liquidandgrit.com/action/public/cms/plugin', {
-      method: 'POST',
-      body: form
-    }, datas.cookies);
+    // const data = await fetchLgJson('https://my.liquidandgrit.com/action/public/cms/plugin', {
+    //   method: 'POST',
+    //   body: form
+    // }, datas.cookies);
+
+    let response = await axios.post('https://my.liquidandgrit.com/action/public/cms/plugin', form, {
+      headers: {
+        Cookie: datas.cookies,
+        "Content-Type": "text/html; charset=UTF-8",
+      },
+      responseType: "text"
+    });
+
+    let data = JSON.parse(response.data);
 
     return c.json({
       success: true,
