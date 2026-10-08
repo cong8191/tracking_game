@@ -1461,32 +1461,44 @@ app.post('/show-data', async (c) => {
     obj.tag18 = [tagId.toString()];
     obj.limit = "500";
 
-    const form = new URLSearchParams();
-    form.append('csrf', datas.csrf);
-    form.append('plugin', 'event');
-    form.append('action', 'searchItem');
-    form.append('vo-action', '');
-    form.append('filter_conditions', JSON.stringify(obj));
+        // 1. Chuẩn bị params dạng URLSearchParams
+    const params = new URLSearchParams();
+    params.append('csrf', datas.csrf);
+    params.append('plugin', 'event');
+    params.append('action', 'searchItem');
+    params.append('vo-action', '');
+    params.append('filter_conditions', typeof obj === 'string' ? obj : JSON.stringify(obj));
 
-    // const data = await fetchLgJson('https://my.liquidandgrit.com/action/public/cms/plugin', {
-    //   method: 'POST',
-    //   body: form
-    // }, datas.cookies);
+    const bodyString = params.toString();
 
-    let response = await axios.post('https://my.liquidandgrit.com/action/public/cms/plugin', form, {
+    // 2. Gọi fetch với đầy đủ headers giả lập browser
+    const response = await fetch('https://my.liquidandgrit.com/action/public/cms/plugin', {
+      method: 'POST',
       headers: {
-        Cookie: datas.cookies,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         'Accept': '*/*',
         'Accept-Language': 'en-US,en;q=0.9',
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'Content-Length': new TextEncoder().encode(bodyString).length.toString(),
+        'Cookie': datas.cookies,
         'Origin': 'https://my.liquidandgrit.com',
         'Referer': 'https://my.liquidandgrit.com/',
-        
+        'Sec-Fetch-Dest': 'empty',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Site': 'same-origin',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'X-Requested-With': 'XMLHttpRequest'
       },
-      responseType: "text"
+      body: bodyString
     });
 
-    let data = JSON.parse(response.data);
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Upstream returned ${response.status}: ${errText}`);
+    }
+
+    const responseData = await response.text();
+
+    let data = JSON.parse(responseData);
 
     return c.json({
       success: true,
