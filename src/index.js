@@ -122,25 +122,53 @@ async function fetchLg(url, options = {}, cookies = '', retries = 2) {
 
   const method = (options.method || 'POST').toLowerCase();
   const headers = {
-    'User-Agent': BROWSER_USER_AGENT,
-    ...(options.headers || {})
+    'User-Agent': BROWSER_USER_AGENT
   };
+
+  if (options.headers) {
+    if (typeof options.headers.entries === 'function') {
+      for (const [k, v] of options.headers.entries()) {
+        headers[k] = v;
+      }
+    } else if (typeof options.headers === 'object') {
+      Object.assign(headers, options.headers);
+    }
+  }
+
   if (cleanCookies) {
     headers['Cookie'] = cleanCookies;
+  }
+
+  // FIX: When body is FormData, do NOT set custom Content-Type, or the runtime drops the multipart boundary!
+  const isFormData = options.body && (
+    (typeof FormData !== 'undefined' && options.body instanceof FormData) ||
+    (typeof options.body === 'object' && typeof options.body.append === 'function')
+  );
+
+  if (isFormData) {
+    delete headers['Content-Type'];
+    delete headers['content-type'];
+    delete headers['Content-type'];
   }
 
   const RETRIABLE_CODES = [460, 520, 521, 502, 503, 504];
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const res = await axios({
+      const axiosConfig = {
         url,
         method,
         headers,
-        data: options.body, // Pass FormData directly just like in server.js
+        data: options.body,
         responseType: 'text',
         validateStatus: () => true
-      });
+      };
+
+      if (isFormData) {
+        axiosConfig.transformRequest = [(data) => data];
+      }
+
+      const res = await axios(axiosConfig);
 
       if (RETRIABLE_CODES.includes(res.status) && attempt < retries) {
         console.warn(`⚠️ LiquidAndGrit HTTP ${res.status} on attempt ${attempt + 1}. Retrying in 400ms...`);
