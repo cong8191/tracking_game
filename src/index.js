@@ -3,6 +3,7 @@ import { cors } from 'hono/cors';
 import { Pool, neon } from '@neondatabase/serverless';
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat.js';
+import axios from 'axios';
 
 dayjs.extend(customParseFormat);
 
@@ -110,15 +111,11 @@ function getLgHeaders(cookies, customHeaders = {}) {
   return finalHeaders;
 }
 
-// Auto-retrying fetch with HTTP 460 bypass (converting text FormData to URLSearchParams) and backoff
+// Auto-retrying request powered by Axios to avoid Cloudflare fetch HTTP 460 errors
 async function fetchLg(url, options = {}, cookies = '', retries = 2) {
   let reqOptions = { ...options };
 
-  // BYPASS HTTP 460 (ALB / Apache stream reset):
-  // When FormData without files is sent via Cloudflare Worker fetch(),
-  // it forces multipart/form-data chunked streaming which AWS ALB / Apache resets with HTTP 460.
-  // Converting to URLSearchParams sets exact Content-Length and application/x-www-form-urlencoded,
-  // which ALB/Apache processes with 100% success.
+  // Convert FormData to URLSearchParams if it only contains text fields
   if (reqOptions.body && typeof reqOptions.body === 'object') {
     if (typeof reqOptions.body.entries === 'function') {
       let hasFile = false;
@@ -139,19 +136,37 @@ async function fetchLg(url, options = {}, cookies = '', retries = 2) {
   }
 
   const headers = getLgHeaders(cookies, reqOptions.headers || {});
-  reqOptions.headers = headers;
+  const method = (reqOptions.method || 'GET').toLowerCase();
 
   const RETRIABLE_CODES = [460, 520, 521, 502, 503, 504];
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const response = await fetch(url, reqOptions);
-      if (RETRIABLE_CODES.includes(response.status) && attempt < retries) {
-        console.warn(`⚠️ LiquidAndGrit HTTP ${response.status} on attempt ${attempt + 1}. Retrying in 400ms...`);
+      const res = await axios({
+        url,
+        method,
+        headers,
+        data: reqOptions.body,
+        responseType: 'text',
+        validateStatus: () => true // Allow handling all status codes manually
+      });
+
+      if (RETRIABLE_CODES.includes(res.status) && attempt < retries) {
+        console.warn(`⚠️ LiquidAndGrit HTTP ${res.status} on attempt ${attempt + 1}. Retrying in 400ms...`);
         await new Promise(r => setTimeout(r, 400 * (attempt + 1)));
         continue;
       }
-      return response;
+
+      const resDataText = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+
+      return {
+        status: res.status,
+        ok: res.status >= 200 && res.status < 300,
+        headers: new Headers(res.headers),
+        text: async () => resDataText,
+        json: async () => typeof res.data === 'string' ? JSON.parse(res.data) : res.data,
+        data: res.data
+      };
     } catch (err) {
       if (attempt < retries) {
         console.warn(`⚠️ LiquidAndGrit network error on attempt ${attempt + 1}: ${err.message}. Retrying in 400ms...`);
