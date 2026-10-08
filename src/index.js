@@ -1472,37 +1472,43 @@ app.post('/show-data', async (c) => {
     const bodyString = params.toString();
 
     // 2. Gọi fetch với đầy đủ headers giả lập browser
-    const response = await fetch('https://my.liquidandgrit.com/action/public/cms/plugin', {
-      method: 'POST',
-      headers: {
-        'Accept': '*/*',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'Content-Length': new TextEncoder().encode(bodyString).length.toString(),
-        'Cookie': datas.cookies,
-        'Origin': 'https://my.liquidandgrit.com',
-        'Referer': 'https://my.liquidandgrit.com/',
-        'Sec-Fetch-Dest': 'empty',
-        'Sec-Fetch-Mode': 'cors',
-        'Sec-Fetch-Site': 'same-origin',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'X-Requested-With': 'XMLHttpRequest'
-      },
-      body: bodyString
-    });
+        try {
+      const response = await fetch('https://my.liquidandgrit.com/action/public/cms/plugin', {
+        method: 'POST',
+        headers: {
+          'Host': 'my.liquidandgrit.com',
+          'Origin': 'https://my.liquidandgrit.com',
+          'Referer': 'https://my.liquidandgrit.com/',
+          'Cookie': datas.cookies,
+          'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'X-Requested-With': 'XMLHttpRequest'
+        },
+        body: params.toString()
+      });
 
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Upstream returned ${response.status}: ${errText}`);
+      // Log chi tiết response headers để biết server/WAF nào trả về 460
+      const debugHeaders = {};
+      response.headers.forEach((val, key) => { debugHeaders[key] = val; });
+      
+      console.log('--- UPSTREAM DEBUG ---');
+      console.log('Status:', response.status, response.statusText);
+      console.log('Headers:', JSON.stringify(debugHeaders, null, 2));
+
+      const text = await response.text();
+      console.log('Body preview:', text.slice(0, 300));
+
+      
+    } catch (err) {
+      console.error('Fetch throw error:', err.message);
+      return new Response(err.message, { status: 500 });
     }
 
-    const responseData = await response.text();
-
-    let data = JSON.parse(responseData);
+    
 
     return c.json({
       success: true,
-      content_html: data.content_html
+      content_html: "ok"
     });
   } catch (error) {
     console.error("❌ Error ", error.message);
