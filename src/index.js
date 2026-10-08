@@ -1615,7 +1615,7 @@ app.post('/check_item', async (c) => {
       return !matched;
     });
 
-    for (const item of excludes) {
+    for (const item of excludes)  {
       const ret = {
         name: `${item.eventName} ${item.subEvent === '' ? '' : '(' + item.subEvent + ')'} (${item.start}-${item.to})( Other )`,
         details: []
