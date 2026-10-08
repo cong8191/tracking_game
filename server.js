@@ -1,291 +1,714 @@
-const express = require('express');
-const app = express();
-const dayjs = require('dayjs');
-const fs = require('fs');
-const path = require('path');
-const axios = require('axios');
-const PORT = process.env.PORT || 3000;
-const cors = require('cors');
-const multer = require('multer');
-const upload = multer({ storage: multer.memoryStorage() });
-const customParseFormat = require('dayjs/plugin/customParseFormat');
+import 'dotenv/config';
+import express from 'express';
+import dayjs from 'dayjs';
+import customParseFormat from 'dayjs/plugin/customParseFormat.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+import axios from 'axios';
+import cors from 'cors';
+import multer from 'multer';
+import pg from 'pg';
+import FormData from 'form-data';
+import * as cheerio from 'cheerio';
 
-// Kích hoạt plugin
+// Enable ESM compatibility helpers
+const require = createRequire(import.meta.url);
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Kích hoạt plugin dayjs
 dayjs.extend(customParseFormat);
-
-// --- KẾT NỐI POSTGRES ---
-// Thay Client bằng Pool
-const { Pool } = require('pg');
-
-// Thay new Client bằng new Pool
-const db = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false, // ⚠️ QUAN TRỌNG: Bắt buộc phải có dòng này khi deploy lên Render/Heroku
-  },
-  connectionTimeoutMillis: 10000, // ⚠️ QUAN TRỌNG: Tăng thời gian chờ lên 10s (đề phòng DB đang ngủ)
-  idleTimeoutMillis: 30000,       // Đóng kết nối nếu rảnh quá 30s
-  max: 20,                        // Tối đa 20 kết nối cùng lúc
-});
-
-// Test kết nối khi khởi động Server
-db.connect()
-  .then(client => {
-    console.log('✅ Đã kết nối PostgreSQL thành công!');
-    client.release(); // Nhả kết nối ngay sau khi test xong
-  })
-  .catch(err => {
-    console.error('❌ Lỗi kết nối Database:', err.message);
-    // Không exit process để server vẫn chạy, lỡ DB dậy muộn thì request sau vẫn xử lý được
-  });
-// ------------------------
-
-const FormData1 = require('form-data');
-const { log } = require('console');
-const cheerio = require('cheerio');
-const { title } = require('process');
-const { type } = require('os');
-const { constants } = fs;
 
 process.env['NODE_TLS_REJECT_UNAUTHORIZED'] = '0';
 
-const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwzIlzn5gfKE38-mAGx1W7VCPfCu78nYDEnPmb6aUPVRl_dWALFthGYHFYbCSqyB0WLYw/exec";
+const app = express();
+const PORT = process.env.PORT || 3000;
 
-
+// Middleware
 app.use(express.json());
 app.use(cors());
 
+// --- KẾT NỐI POSTGRES ---
+const { Pool } = pg;
+const db = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false,
+  },
+  connectionTimeoutMillis: 10000,
+  idleTimeoutMillis: 30000,
+  max: 20,
+});
 
+db.connect()
+  .then(client => {
+    console.log('✅ Đã kết nối PostgreSQL thành công!');
+    client.release();
+  })
+  .catch(err => {
+    console.error('❌ Lỗi kết nối Database:', err.message);
+  });
+
+const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL || "https://script.google.com/macros/s/AKfycbwzIlzn5gfKE38-mAGx1W7VCPfCu78nYDEnPmb6aUPVRl_dWALFthGYHFYbCSqyB0WLYw/exec";
+const BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+// --- TABLE ROW PARSERS ---
+function parseCndTableRows(html) {
+  const rows = [];
+  if (!html || typeof html !== 'string') return rows;
+
+  const trMatches = html.match(/<tr[^>]*>[\s\S]*?<\/tr>/gi);
+  if (!trMatches) return rows;
+
+  for (let i = 0; i < trMatches.length; i++) {
+    const tr = trMatches[i];
+    const tdMatches = tr.match(/<td[^>]*>[\s\S]*?<\/td>/gi);
+    if (tdMatches && tdMatches.length >= 6) {
+      const col0 = tdMatches[0].replace(/<[^>]+>/g, '').trim();
+      const col1 = tdMatches[1].replace(/<[^>]+>/g, '').trim();
+      const col4 = tdMatches[4].replace(/<[^>]+>/g, '').trim();
+      const col5 = tdMatches[5].replace(/<[^>]+>/g, '').trim();
+
+      rows.push({ col0, col1, col4, col5 });
+    }
+  }
+  return rows;
+}
+
+function parseSearchGalleryRows(html, searchKeyword) {
+  const matched = [];
+  if (!html || typeof html !== 'string') return matched;
+
+  const trMatches = html.match(/<tr[^>]*>[\s\S]*?<\/tr>/gi);
+  if (!trMatches) return matched;
+
+  const kw = (searchKeyword || '').toLowerCase().trim();
+
+  for (let i = 0; i < trMatches.length; i++) {
+    const tr = trMatches[i];
+    const tdMatches = tr.match(/<td[^>]*>[\s\S]*?<\/td>/gi);
+    if (tdMatches && tdMatches.length >= 3) {
+      const col0Text = tdMatches[0].replace(/<[^>]+>/g, '').trim();
+      const col2Text = tdMatches[2].replace(/<[^>]+>/g, '').trim();
+
+      const hrefMatch = tdMatches[0].match(/href=["']([^"']+)["']/i) || tr.match(/href=["']([^"']+)["']/i);
+      const href = hrefMatch ? hrefMatch[1] : '';
+
+      if (!kw || col0Text.toLowerCase().includes(kw) || col2Text.toLowerCase().includes(kw)) {
+        matched.push({
+          title: col0Text,
+          href: href,
+          sub: col2Text
+        });
+      }
+    }
+  }
+  return matched;
+}
+
+// --- LIQUID & GRIT REQUEST UTILITIES ---
+function getLgHeaders(cookies, customHeaders = {}) {
+  let cleanCookies = '';
+  if (typeof cookies === 'string') {
+    cleanCookies = cookies.replace(/[\r\n]+/g, '').trim();
+  } else if (cookies && typeof cookies === 'object') {
+    cleanCookies = (cookies.cookies || cookies.cookie || '').toString().replace(/[\r\n]+/g, '').trim();
+  }
+
+  const finalHeaders = {
+    'User-Agent': BROWSER_USER_AGENT,
+    'Accept': '*/*',
+    'Accept-Language': 'en-US,en;q=0.9'
+  };
+
+  if (customHeaders) {
+    Object.assign(finalHeaders, customHeaders);
+  }
+
+  if (cleanCookies && !finalHeaders['Cookie'] && !finalHeaders['cookie']) {
+    finalHeaders['Cookie'] = cleanCookies;
+  }
+
+  return finalHeaders;
+}
+
+async function fetchLg(url, options = {}, cookies = '', retries = 2) {
+  let cleanCookies = '';
+  if (typeof cookies === 'string') {
+    cleanCookies = cookies.replace(/[\r\n]+/g, '').trim();
+  } else if (cookies && typeof cookies === 'object') {
+    cleanCookies = (cookies.cookies || cookies.cookie || '').toString().replace(/[\r\n]+/g, '').trim();
+  }
+
+  const method = (options.method || 'POST').toLowerCase();
+  const headers = {
+    'User-Agent': BROWSER_USER_AGENT
+  };
+
+  if (options.headers) {
+    Object.assign(headers, options.headers);
+  }
+
+  if (cleanCookies) {
+    headers['Cookie'] = cleanCookies;
+  }
+
+  const RETRIABLE_CODES = [460, 520, 521, 502, 503, 504];
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const axiosConfig = {
+        url,
+        method,
+        headers,
+        data: options.body || options.data,
+        responseType: 'text',
+        validateStatus: () => true
+      };
+
+      if (options.body && typeof options.body.getHeaders === 'function') {
+        Object.assign(headers, options.body.getHeaders());
+      }
+
+      const res = await axios(axiosConfig);
+
+      if (RETRIABLE_CODES.includes(res.status) && attempt < retries) {
+        console.warn(`⚠️ LiquidAndGrit HTTP ${res.status} on attempt ${attempt + 1}. Retrying in 400ms...`);
+        await new Promise(r => setTimeout(r, 400 * (attempt + 1)));
+        continue;
+      }
+
+      const resDataText = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+
+      return {
+        status: res.status,
+        ok: res.status >= 200 && res.status < 300,
+        headers: res.headers,
+        text: async () => resDataText,
+        json: async () => typeof res.data === 'string' ? JSON.parse(res.data) : res.data,
+        data: res.data
+      };
+    } catch (err) {
+      if (attempt < retries) {
+        console.warn(`⚠️ LiquidAndGrit network error on attempt ${attempt + 1}: ${err.message}. Retrying in 400ms...`);
+        await new Promise(r => setTimeout(r, 400 * (attempt + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+async function fetchLgJson(url, options = {}, cookies = '', retries = 2) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const response = await fetchLg(url, options, cookies, 0);
+      const text = await response.text();
+
+      if ([460, 520, 521, 502, 503, 504].includes(response.status) || text.includes('error code: 521') || text.includes('502 Bad Gateway') || text.includes('503 Service Unavailable')) {
+        if (attempt < retries) {
+          console.warn(`⚠️ Upstream error (HTTP ${response.status}) on attempt ${attempt + 1}. Retrying in 400ms...`);
+          await new Promise(r => setTimeout(r, 400 * (attempt + 1)));
+          continue;
+        }
+        throw new Error(`Server Liquid&Grit tạm thời bận (HTTP ${response.status}). Vui lòng thử lại.`);
+      }
+
+      try {
+        return JSON.parse(text);
+      } catch (parseErr) {
+        if (attempt < retries) {
+          console.warn(`⚠️ Non-JSON response on attempt ${attempt + 1}. Retrying in 400ms...`);
+          await new Promise(r => setTimeout(r, 400 * (attempt + 1)));
+          continue;
+        }
+        if (response.ok) return { message: text };
+        throw new Error(`Server Liquid&Grit trả về dữ liệu không hợp lệ (HTTP ${response.status}): ${text.slice(0, 150)}`);
+      }
+    } catch (err) {
+      if (attempt < retries) {
+        await new Promise(r => setTimeout(r, 400 * (attempt + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+// --- COOKIE STORAGE (MEMORY + DB + FILE FALLBACK) ---
+let memoryCookies = null;
+
+async function ensureSettingsTable() {
+  try {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS system_settings (
+        key VARCHAR(255) PRIMARY KEY,
+        value TEXT
+      )
+    `);
+  } catch (err) {
+    console.error('Error creating system_settings table:', err.message);
+  }
+}
+
+async function getStoredCookies() {
+  // 1. FAST PATH: RAM Memory Cache
+  if (memoryCookies && Object.keys(memoryCookies).length > 0) {
+    return memoryCookies;
+  }
+
+  // 2. Try file fallback if file exists (local development)
+  try {
+    if (fs.existsSync('cookies.json')) {
+      const dataStr = fs.readFileSync('cookies.json', 'utf-8');
+      if (dataStr) {
+        memoryCookies = JSON.parse(dataStr);
+        return memoryCookies;
+      }
+    }
+  } catch (e) {}
+
+  // 3. PostgreSQL Database
+  try {
+    await ensureSettingsTable();
+    const res = await db.query("SELECT value FROM system_settings WHERE key = 'login_cookies'");
+    if (res.rows[0]?.value) {
+      const parsed = JSON.parse(res.rows[0].value);
+      memoryCookies = parsed;
+      return parsed;
+    }
+  } catch (err) {
+    console.error('DB cookie get error:', err.message);
+  }
+
+  return memoryCookies || {};
+}
+
+async function saveStoredCookies(dataStr) {
+  const parsed = typeof dataStr === 'string' ? JSON.parse(dataStr) : dataStr;
+  const jsonString = JSON.stringify(parsed);
+  memoryCookies = parsed;
+
+  // 1. File write (ignore if read-only filesystem like Deno Deploy)
+  try {
+    fs.writeFileSync('cookies.json', jsonString);
+  } catch (e) {}
+
+  // 2. Database save
+  try {
+    await ensureSettingsTable();
+    await db.query(`
+      INSERT INTO system_settings (key, value)
+      VALUES ('login_cookies', $1)
+      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+    `, [jsonString]);
+  } catch (err) {
+    console.error('DB cookie save error:', err.message);
+  }
+}
+
+// --- GAME & EVENT CACHE HELPERS ---
+const gameCache = new Map();
+async function getGameByIdAsync(gameId) {
+  if (gameCache.has(gameId)) return gameCache.get(gameId);
+  const resDb = await db.query("SELECT * from games WHERE id = $1", [gameId]);
+  if (!resDb.rows[0]) return null;
+  const row = resDb.rows[0];
+  const result = {
+    ...row,
+    tagId: row.tagId || row.tagid
+  };
+  gameCache.set(gameId, result);
+  return result;
+}
+
+async function getEventByIdAsync(id) {
+  const resDb = await db.query(
+    'SELECT event.*, games.name as "gameName" FROM event inner join games on event.gameid = games.id WHERE event.id = $1',
+    [id]
+  );
+  if (!resDb.rows[0]) return null;
+  const row = resDb.rows[0];
+  return {
+    event_id: row.id,
+    name: row.name,
+    gallery_id: row.gallery_id,
+    g_name: row.g_name,
+    game_name: row.gameName
+  };
+}
+
+const calculateDateRange = (dateRangeStr) => {
+  if (!dateRangeStr || typeof dateRangeStr !== 'string' || !dateRangeStr.trim()) {
+    return null;
+  }
+
+  const currentYear = dayjs().year();
+  const currentMonth = dayjs().month() + 1;
+
+  const parts = dateRangeStr.split('-').map(str => str.trim());
+  let startStr = '', endStr = '';
+
+  if (parts.length === 1) {
+    startStr = parts[0];
+    endStr = parts[0];
+  } else if (parts.length === 2) {
+    startStr = parts[0];
+    endStr = parts[1];
+  } else {
+    return { startDate: null, endDate: null };
+  }
+
+  let endDay, endMonth, endYear = currentYear;
+  if (endStr.includes('/')) {
+    const splitEnd = endStr.split('/');
+    endDay = parseInt(splitEnd[1]);
+    endMonth = parseInt(splitEnd[0]);
+  } else {
+    endDay = parseInt(endStr);
+    endMonth = currentMonth;
+  }
+
+  let startDay, startMonth = currentMonth, startYear = currentYear;
+  if (startStr.includes('/')) {
+    const splitStart = startStr.split('/');
+    startDay = parseInt(splitStart[1]);
+    startMonth = parseInt(splitStart[0]);
+  } else {
+    startDay = parseInt(startStr);
+  }
+
+  if (startMonth === 12 && endMonth === 1) {
+    endYear = startYear + 1;
+  }
+
+  return {
+    startDate: dayjs(`${startYear}-${startMonth}-${startDay}`, 'YYYY-M-D'),
+    endDate: dayjs(`${endYear}-${endMonth}-${endDay}`, 'YYYY-M-D')
+  };
+};
+
+const parseTrackerItem = (logString) => {
+  if (!logString || typeof logString !== 'string') return null;
+
+  const parts = logString.split('|');
+  let contentPart = parts[0].trim();
+  let urlPart = parts[1] ? parts[1].trim() : null;
+
+  const prefixMatch = contentPart.match(/(?:for|gallery)\s+/);
+  if (!prefixMatch) return null;
+
+  const specialCharsRegex = /[\p{So}\p{Cf}]/gu;
+  let mainString = contentPart.substring(prefixMatch.index + prefixMatch[0].length).trim();
+  mainString = mainString.replace(/"/g, '').replace(specialCharsRegex, '').trim();
+
+  const dateRegex = /\(([^)]+)\)$/;
+  const dateMatch = mainString.match(dateRegex);
+
+  let rawDate = '';
+  let dates = {};
+  let remaining = '';
+  if (dateMatch) {
+    rawDate = dateMatch[1].trim();
+    dates = calculateDateRange(rawDate) || {};
+    remaining = mainString.substring(0, dateMatch.index).trim();
+  }
+
+  const subEventRegex = /\(([^)]+)\)$/;
+  const subMatch = remaining.match(subEventRegex);
+
+  let eventName = "";
+  let subEvent = "";
+
+  if (subMatch) {
+    subEvent = subMatch[1].trim();
+    eventName = remaining.substring(0, subMatch.index).trim();
+  } else {
+    eventName = remaining === '' ? mainString : remaining;
+    subEvent = "";
+  }
+
+  return {
+    eventName,
+    subEvent,
+    url: urlPart,
+    originalDate: rawDate,
+    startDateObj: dates.startDate,
+    endDateObj: dates.endDate
+  };
+};
+
+const fetchGalleryInfo = async (galleryName, gameId, gameName = '', retList = false) => {
+  const datas = await getStoredCookies();
+  if (!datas || Object.keys(datas).length === 0) {
+    return retList ? [] : {};
+  }
+
+  const game = await getGameByIdAsync(gameId);
+  const tagId = game ? (game.tagId || game.tagid) : '';
+
+  const obj = JSON.parse('{"limit": 500, "init": 0, "page": 0, "type": [], "status": [], "category": [], "non_category": [], "tag37": [], "tag38": [], "tag28": [], "tag34": [], "tag18": ["768367"], "tag35": [], "tag21": [], "tag29": [], "tag36": [], "tag22": [], "tag26": [], "tag45": [], "tag42": [], "tag9": [], "tag32": [], "tag4": [], "tag1": [], "tag2": [], "tag3": [], "tag10": [], "tag12": [], "tag7": [], "tag8": [], "tag11": [], "tag43": [], "tag13": [], "search": ""}');
+  obj.tag18 = [tagId.toString()];
+  obj.search = galleryName;
+
+  const form = new FormData();
+  form.append('csrf', datas.csrf);
+  form.append('id', '1');
+  form.append('vo-action', '');
+  form.append('filter_conditions', JSON.stringify(obj));
+
+  const responseData = await fetchLgJson('https://my.liquidandgrit.com/action/admin/cms/blog/post-cnd', {
+    method: 'POST',
+    body: form
+  }, datas.cookies);
+
+  const contentList = responseData && responseData.content ? responseData.content : [];
+
+  if (!retList) {
+    const foundItem = contentList.find(item => item.name.toLowerCase() === galleryName.toLowerCase());
+    return foundItem || {};
+  }
+
+  return contentList.filter(item => `${galleryName} - ${gameName}`.toLowerCase().includes(item.name.toLowerCase()));
+};
+
+const galleryInfoCache = new Map();
+const fetchGalleryInfoCached = async (galleryName, gameId, gameName = '', retList = false) => {
+  const cacheKey = `${galleryName}_${gameId}_${gameName}_${retList}`;
+  if (galleryInfoCache.has(cacheKey)) return galleryInfoCache.get(cacheKey);
+  const res = await fetchGalleryInfo(galleryName, gameId, gameName, retList);
+  galleryInfoCache.set(cacheKey, res);
+  return res;
+};
+
+// --- UPLOAD CONFIG ---
+const uploadDir = path.join(__dirname, 'uploads');
+try {
+  if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
+  }
+} catch (e) {}
+
+const uploadStorage = fs.existsSync(uploadDir) ? uploadDir : os.tmpdir();
+const upload2 = multer({ dest: uploadStorage });
+
+const storageSqlite = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, path.resolve(__dirname));
+  },
+  filename: (req, file, cb) => {
+    cb(null, 'sample_game_db.sqlite');
+  }
+});
+const uploadSqlite = multer({ storage: storageSqlite });
+
+// ==========================================
+//                   ROUTES
+// ==========================================
+
+// POST /saveLoginData
 app.post('/saveLoginData', async (req, res) => {
   try {
     const { datas } = req.body;
-    // Lưu cookies và csrfToken vào file
-    fs.writeFileSync('cookies.json', datas);
+    await saveStoredCookies(datas);
     res.json({ success: true });
   } catch (error) {
     console.error('Login failed:', error);
-    res.json({ success: false, message: error });
+    res.json({ success: false, message: error.message });
   }
 });
 
+// GET /readDataCookies
 app.get('/readDataCookies', async (req, res) => {
   try {
-    const dataStr = fs.existsSync('cookies.json') ? fs.readFileSync('cookies.json', 'utf-8') : '';
-    let form = new FormData();
-
-    const datas = dataStr != '' ? JSON.parse(dataStr) : {};
-
-    if (datas.length === 0) {
-      res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
-      return;
+    const datas = await getStoredCookies();
+    if (!datas || Object.keys(datas).length === 0) {
+      return res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
     }
 
+    const form = new FormData();
     form.append('csrf', datas.csrf);
-    form.append('id', '1');
+    form.append('vo-action', 'get_unread_count');
 
-    let response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/manage', form, {
-      headers: {
-        Cookie: datas.cookies,
-        "Content-Type": "text/html; charset=UTF-8",
-      },
-      responseType: "text"
-    });
+    try {
+      const data = await fetchLgJson('https://my.liquidandgrit.com/action/admin/cmn/inbox-cnd', {
+        method: 'POST',
+        body: form
+      }, datas.cookies);
 
-    const data = JSON.parse(response.data);
+      if (data && data.error_message && data.error_message.length > 0) {
+        console.warn("⚠️ Token hết hạn từ Liquid&Grit:", data.error_message);
+        return res.json({ success: true, result: '', expired: true, message: data.error_message[0] });
+      }
 
-    if (!data.blogData) {
-      res.json({ success: true, result: '' });
-      return;
+      return res.json({ success: true, result: JSON.stringify(datas), data });
+    } catch (apiErr) {
+      console.warn("⚠️ Không thể kiểm tra cookie với Liquid&Grit:", apiErr.message);
+      return res.json({ success: true, result: JSON.stringify(datas), warning: apiErr.message });
     }
-
-    res.json({ success: true, result: dataStr });
   } catch (err) {
     console.error("❌ loi doc data cookie:", err.message);
-    res.status(500).json({ error: err.message });
-    return;
+    return res.status(500).json({ error: err.message });
   }
-
 });
-// API: /games?date=YYYY-MM-DD
-app.get('/games', (req, res) => {
+
+// GET /games?date=YYYY-MM-DD
+app.get('/games', async (req, res) => {
   const date = req.query.date;
   if (!date) return res.status(400).json({ error: 'Missing date parameter' });
 
-  const sql = `
-    SELECT 
-        g.id AS game_id,
-        g.name AS game_name,
-        e.id AS event_id,
-        e.name AS event_name,
-        e.gallery_id,
-        e.default_day,
-        e.g_name,
-        e.post_slug
-    FROM games g
-    LEFT JOIN event e ON g.id = e.gameid
-    AND COALESCE(e."IsContent", false) <> true
-    ORDER BY g.id, e.id
-  `;
+  try {
+    const sql = `
+      SELECT 
+          g.id AS game_id,
+          g.name AS game_name,
+          e.id AS event_id,
+          e.name AS event_name,
+          e.gallery_id,
+          e.default_day,
+          e.g_name,
+          e.post_slug
+      FROM games g
+      LEFT JOIN event e ON g.id = e.gameid
+      AND COALESCE(e."IsContent", false) <> true
+      ORDER BY g.id, e.id
+    `;
 
-  // Postgres dùng $1 thay vì ?
-  const sqlAction = `
-    SELECT 
-        a.id AS action_id,
-        a.eventid,
-        a.status,
-        a."date",
-        a."from",
-        a."to",
-        a."type"
-    FROM action a
-    WHERE a.date = $1 
-  `;
+    const sqlAction = `
+      SELECT 
+          a.id AS action_id,
+          a.eventid,
+          a.status,
+          a."date",
+          a."from",
+          a."to",
+          a."type"
+      FROM action a
+      WHERE a.date = $1 
+    `;
 
-  // db.all -> db.query
-  db.query(sql, [], (err, resDb) => {
-    if (err) return res.status(500).json({ error: err.message });
-    const rows = resDb.rows; // Lấy rows từ kết quả
+    const resDb = await db.query(sql, []);
+    const resAction = await db.query(sqlAction, [date]);
 
-    db.query(sqlAction, [date], (err2, resAction) => {
-      if (err2) return res.status(500).json({ error: err2.message });
-      const actions = resAction.rows;
+    const rows = resDb.rows;
+    const actions = resAction.rows;
+    const result = {};
 
-      const result = {};
-
-      for (const row of rows) {
-        const gameId = row.game_id;
-        if (!result[gameId]) {
-          result[gameId] = {
-            id: gameId,
-            name: row.game_name,
-            events: [],
-            "event-details": []
-          };
-        }
-
-        if (row.event_id) {
-          result[gameId].events.push({
-            id: row.event_id,
-            name: row.event_name,
-            gallery_id: row.gallery_id,
-            default_day: row.default_day,
-            g_name: row.g_name,
-            post_slug: row.post_slug || ''
-          });
-        }
+    for (const row of rows) {
+      const gameId = row.game_id;
+      if (!result[gameId]) {
+        result[gameId] = {
+          id: gameId,
+          name: row.game_name,
+          events: [],
+          "event-details": []
+        };
       }
 
-      // gán event-details vào đúng game
-      for (const action of actions) {
-        const game = Object.values(result).find(g =>
-          g.events.some(ev => ev.id === action.eventid)
-        );
-
-        if (game) {
-          game["event-details"].push({
-            id: action.action_id,
-            event_id: action.eventid,
-            status: action.status,
-            from: action.from || "",
-            to: action.to || "",
-            date: action.date,
-            type: action.type
-          });
-        }
+      if (row.event_id) {
+        result[gameId].events.push({
+          id: row.event_id,
+          name: row.event_name,
+          gallery_id: row.gallery_id,
+          default_day: row.default_day,
+          g_name: row.g_name,
+          post_slug: row.post_slug || ''
+        });
       }
+    }
 
-      res.json(Object.values(result));
-    });
-  });
+    for (const action of actions) {
+      const game = Object.values(result).find(g =>
+        g.events.some(ev => ev.id === action.eventid)
+      );
+
+      if (game) {
+        game["event-details"].push({
+          id: action.action_id,
+          event_id: action.eventid,
+          status: action.status,
+          from: action.from || "",
+          to: action.to || "",
+          date: action.date,
+          type: action.type
+        });
+      }
+    }
+
+    res.json(Object.values(result));
+  } catch (err) {
+    console.error("❌ Error in /games:", err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
+// POST /delete_file
 app.post('/delete_file', async (req, res) => {
+  const { gallery_id, file } = req.body;
 
- const { gallery_id, file } = req.body;
+  if (!gallery_id || !file) {
+    return res.status(400).json({ error: 'Thiếu dữ liệu: name, gallery_id là bắt buộc.' });
+  }
+
   try {
-
-
-    if (!gallery_id, !file) {
-      return res.status(400).json({ error: 'Thiếu dữ liệu: name, gallery_id là bắt buộc.' });
+    const datas = await getStoredCookies();
+    if (!datas || Object.keys(datas).length === 0) {
+      return res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
     }
 
-    const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
+    const form = new FormData();
+    form.append('csrf', datas.csrf);
+    form.append('vo-action', 'delete_file');
+    form.append('type', '2');
+    form.append('id', gallery_id);
+    form.append('file', JSON.stringify(file));
 
-    console.log(datas);
-    if (datas.length === 0) {
-      res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
-      return;
-    }
+    await fetchLg('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', {
+      method: 'POST',
+      body: form
+    }, datas.cookies);
 
-
-    const form2 = new FormData();
-      form2.append('csrf', datas.csrf);
-      form2.append('vo-action', 'delete_file');
-      form2.append('type', '2');
-      form2.append('id', gallery_id);
-      form2.append('file', JSON.stringify(file));
-      console.log(form2);
-      
-      response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', form2, {
-        headers: {
-          Cookie: datas.cookies,
-          "Content-Type": "text/html; charset=UTF-8",
-        },
-        responseType: "text"
-      });
-
-      res.json({ success: true, result: "OK" });
-
+    res.json({ success: true, result: "OK" });
   } catch (error) {
-     console.error(err);
+    console.error("❌ Error in /delete_file:", error.message);
     res.status(500).send('loi khi xóa file.');
   }
 });
 
+// POST /getInfo
 app.post('/getInfo', async (req, res) => {
   const { event_id } = req.body;
-  try {
-    const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
 
-    console.log(datas);
-    if (datas.length === 0) {
-      res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
-      return;
+  try {
+    const datas = await getStoredCookies();
+    if (!datas || Object.keys(datas).length === 0) {
+      return res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
     }
 
-
-
-    let form = new FormData();
-
+    const form = new FormData();
     form.append('csrf', datas.csrf);
     form.append('id', event_id);
 
-    let response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', form, {
-      headers: {
-        Cookie: datas.cookies,
-        "Content-Type": "text/html; charset=UTF-8",
-      },
-      responseType: "text"
-    });
-
-    const data = JSON.parse(response.data);
-
+    const data = await fetchLgJson('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', {
+      method: 'POST',
+      body: form
+    }, datas.cookies);
 
     res.json({ success: true, result: data });
-
   } catch (err) {
-    console.error("❌ Error calling Google Sheet:", err.message);
+    console.error("❌ Error in /getInfo:", err.message);
     res.status(500).json({ error: err.message });
-    return;
   }
 });
 
-const upload2 = multer({ dest: 'uploads/' });
+// POST /upload
 app.post('/upload', upload2.single('file'), async (req, res) => {
   try {
-    const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
-
-    if (datas.length === 0) {
+    const datas = await getStoredCookies();
+    if (!datas || Object.keys(datas).length === 0) {
       return res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
     }
 
@@ -293,23 +716,20 @@ app.post('/upload', upload2.single('file'), async (req, res) => {
       return res.status(400).json({ error: 'Missing file' });
     }
 
-    
     const customerFilename = req.body.customFilename || '';
-    const needUpdateFileName = customerFilename.includes('/') && req.body.isLastChunk;
-    // console.log(needUpdateFileName);
-    
-    const form = new FormData1();
-    for (const [key, value] of Object.entries(req.body)) {
-      
+    const isLastChunk = req.body.isLastChunk === true || req.body.isLastChunk === 'true' || req.body.isLastChunk === '1' || req.body.isLastChunk === 1;
+    const needUpdateFileName = customerFilename.includes('/') && isLastChunk;
 
-      if( key === 'flowFilename' && !customerFilename.includes('/')) {
+    const form = new FormData();
+    for (const [key, value] of Object.entries(req.body)) {
+      if (key === 'file') continue;
+      if (key === 'flowFilename' && !customerFilename.includes('/')) {
         form.append(key, customerFilename);
       } else {
         form.append(key, value);
       }
     }
-    
-    // Stream file thay vì dùng buffer
+
     const fileStream = fs.createReadStream(req.file.path);
     form.append('file', fileStream, req.file.originalname);
 
@@ -319,25 +739,20 @@ app.post('/upload', upload2.single('file'), async (req, res) => {
       {
         headers: {
           ...form.getHeaders(),
-          Cookie: datas.cookies
+          Cookie: datas.cookies,
+          'User-Agent': BROWSER_USER_AGENT
         }
       }
     );
 
-    // Xóa file tạm sau khi gửi xong
-    // fs.unlink(req.file.path, () => { });
     if (fileStream) {
-        fileStream.destroy(); 
+      fileStream.destroy();
     }
-
-    // 2. Xóa file (Nên dùng setTimeout nhỏ hoặc unlink trong callback để chắc chắn OS đã nhả file)
     fs.unlink(req.file.path, (err) => {
-        if (err) console.error(`Không thể xóa file tạm: ${req.file.path}`, err);
-        else console.log(`Đã xóa file tạm: ${req.file.path}`);
+      if (err) console.error(`Không thể xóa file tạm: ${req.file.path}`, err);
     });
 
-
-    if(needUpdateFileName) {
+    if (needUpdateFileName) {
       response.data.file.name = customerFilename;
       response.data.file.order_index = req.body.order_index;
       response.data.file.type = '1';
@@ -348,81 +763,73 @@ app.post('/upload', upload2.single('file'), async (req, res) => {
       form2.append('type', '2');
       form2.append('id', req.body.id);
       form2.append('file', JSON.stringify(response.data.file));
-      console.log(form2);
-      
-      response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', form2, {
-        headers: {
-          Cookie: datas.cookies,
-          "Content-Type": "text/html; charset=UTF-8",
-        },
-        responseType: "text"
-      });
 
-      // console.log(response.data);
-      
+      await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', form2, {
+        headers: {
+          ...form2.getHeaders(),
+          Cookie: datas.cookies,
+          'User-Agent': BROWSER_USER_AGENT
+        }
+      });
     }
+
     res.json({ success: true, result: "OK" });
   } catch (err) {
-    console.error(err);
+    console.error("Upload error:", err.message);
     res.status(500).send('Proxy error while uploading.');
   }
 });
 
+// POST /upload-sqlite
+app.post('/upload-sqlite', uploadSqlite.single('sqlite_file'), (req, res) => {
+  if (!req.file) {
+    return res.status(400).send('No file uploaded');
+  }
+  console.log('Đã ghi đè file sqlite:', req.file.path);
+  res.status(200).send('Upload thành công');
+});
+
+// GET /template-sqlite.db
+app.get('/template-sqlite.db', (req, res, next) => {
+  const filePath = path.resolve(__dirname, 'sample_game_db.sqlite');
+  res.download(filePath, 'template-sqlite.db', (err) => {
+    if (err && err.code === 'ENOENT') return res.status(404).send('Không tìm thấy file mẫu');
+    if (err) return next(err);
+  });
+});
+
+// GET /events
 app.get('/events', async (req, res) => {
-  const sql = `
-    SELECT event.*, games.name AS "gameName"
-    FROM event
-    INNER JOIN games ON event.gameid = games.id
-  `;
-
-  db.query(sql, [], (err, resDb) => {
-    if (err) {
-      console.error('❌ DB error:', err);
-      return res.status(500).json({ error: 'Database error' });
-    }
-    res.json(resDb.rows); // Lấy .rows
-  });
-});
-
-app.get('/listGame', async (req, res) => {
-  const sql = `
-    SELECT * from games
-  `;
-
-  db.query(sql, [], (err, resDb) => {
-    if (err) {
-      console.error('❌ DB error:', err);
-      return res.status(500).json({ error: 'Database error' });
-    }
+  try {
+    const sql = `
+      SELECT event.*, games.name AS "gameName"
+      FROM event
+      INNER JOIN games ON event.gameid = games.id
+    `;
+    const resDb = await db.query(sql, []);
     res.json(resDb.rows);
-  });
+  } catch (err) {
+    console.error('❌ DB error in /events:', err.message);
+    res.status(500).json({ error: 'Database error' });
+  }
 });
 
+// GET /listGame
+app.get('/listGame', async (req, res) => {
+  try {
+    const sql = `SELECT * from games`;
+    const resDb = await db.query(sql, []);
+    res.json(resDb.rows);
+  } catch (err) {
+    console.error('❌ DB error in /listGame:', err.message);
+    res.status(500).json({ error: 'Database error' });
+  }
+});
 
-function getEventByIdAsync(id) {
-  return new Promise((resolve, reject) => {
-    // Postgres dùng $1
-    db.query('SELECT event.*, games.name as "gameName" FROM event inner join games on event.gameid = games.id WHERE event.id = $1', [id], (err, resDb) => {
-      if (err) return reject(err);
-      if (!resDb.rows[0]) return resolve(null); // Lấy phần tử đầu tiên
-
-      const row = resDb.rows[0];
-      const eventObject = {
-        event_id: row.id,
-        name: row.name,
-        gallery_id: row.gallery_id,
-        g_name: row.g_name,
-        game_name: row.gameName
-      };
-
-      resolve(eventObject);
-    });
-  });
-}
-
+// POST /updateContent
 app.post('/updateContent', async (req, res) => {
-  const { gameId, selectedDate , content} = req.body;
-  if (!gameId ) {
+  const { gameId, selectedDate, content } = req.body;
+  if (!gameId) {
     return res.status(400).json({ error: 'Thiếu dữ liệu: gameId là bắt buộc.' });
   }
 
@@ -432,33 +839,28 @@ app.post('/updateContent', async (req, res) => {
   }
 
   try {
-     
     const params = {
       date: dayjs(selectedDate).format("DD/MM/YYYY"),
       name: game.name,
       events: [content || ''],
       isAppendOldText: false
-    }
+    };
 
     await axios.post(GOOGLE_SCRIPT_URL, params, {
       headers: { "Content-Type": "application/json" }
     });
 
-    res.json({
-      success: true,
-    });
-
+    res.json({ success: true });
   } catch (err) {
-    console.error("❌ lỗi tạo goole sheet:", err.message);
+    console.error("❌ lỗi cập nhật google sheet:", err.message);
     res.status(500).json({ error: err.message });
   }
+});
 
-
-})
-
+// POST /getContent
 app.post('/getContent', async (req, res) => {
-  const { gameId, selectedDate , action} = req.body;
-  if (!gameId ) {
+  const { gameId, selectedDate, action } = req.body;
+  if (!gameId) {
     return res.status(400).json({ error: 'Thiếu dữ liệu: gameId là bắt buộc.' });
   }
 
@@ -468,41 +870,27 @@ app.post('/getContent', async (req, res) => {
   }
 
   try {
-     
     const params = {
       date: dayjs(selectedDate).format("DD/MM/YYYY"),
       name: game.name,
       action: action || 'GetDataHtml'
-    }
+    };
 
     const response = await axios.post(GOOGLE_SCRIPT_URL, params, {
       headers: { "Content-Type": "application/json" }
     });
 
-     const sql = `
-      SELECT event.*
-      FROM event where event.gameid = $1
-    `;
+    const sql = `SELECT event.* FROM event WHERE event.gameid = $1`;
+    const resDb = await db.query(sql, [gameId]);
 
-    db.query(sql, [gameId], (err, resDb) => {
-      if (err) {
-        console.error('❌ DB error:', err);
-        return res.status(500).json({ error: 'Khong the lay thong tin event' });
-      }
-
-      res.json({data: response.data.data , events: resDb.rows});
-    });
-
-    
-
+    res.json({ data: response.data.data, events: resDb.rows });
   } catch (err) {
-    console.error("❌ lỗi tạo goole sheet:", err.message);
+    console.error("❌ lỗi đọc google sheet:", err.message);
     res.status(500).json({ error: err.message });
   }
+});
 
-
-})
-
+// POST /createNewGallery
 app.post('/createNewGallery', async (req, res) => {
   const { gameId, galleryName, IsContent, publicDate } = req.body;
   if (!gameId || !galleryName) {
@@ -517,17 +905,12 @@ app.post('/createNewGallery', async (req, res) => {
   let postSlug = '';
 
   try {
-
-    const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
-
-    console.log(datas);
-    if (datas.length === 0) {
-      res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
-      return;
+    const datas = await getStoredCookies();
+    if (!datas || Object.keys(datas).length === 0) {
+      return res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
     }
 
     let form = new FormData();
-
     form.append('csrf', datas.csrf);
     form.append('post[name]', `${galleryName} - ${game.app_name}`);
     form.append('blog_id', '1');
@@ -535,26 +918,16 @@ app.post('/createNewGallery', async (req, res) => {
     form.append('post[type]', 'gallery');
     form.append('vo-action', 'insert');
 
-    let response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', form, {
-      headers: {
-        Cookie: datas.cookies,
-        "Content-Type": "text/html; charset=UTF-8",
-      },
-      responseType: "text"
-    });
-
-    const data = JSON.parse(response.data);
+    const data = await fetchLgJson('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', {
+      method: 'POST',
+      body: form
+    }, datas.cookies);
 
     const insertSql = `
       INSERT INTO event (gameid, name, gallery_id, "IsContent", post_slug)
       VALUES ($1, $2, $3, $4, $5) RETURNING id
     `;
-    db.query(insertSql, [gameId, galleryName, data.gallery_id, IsContent, data.post_slug], function (err, resDb) {
-      if (err) {
-        console.error('❌ Insert error:', err);
-        return res.status(500).json({ error: 'Lỗi khi thêm sự kiện.' });
-      }
-    });
+    await db.query(insertSql, [gameId, galleryName, data.gallery_id, IsContent, data.post_slug]);
 
     form = new FormData();
     form.append('csrf', datas.csrf);
@@ -565,17 +938,13 @@ app.post('/createNewGallery', async (req, res) => {
     form.append('type', 'gallery');
     form.append('vo-action', 'tag_group_relate_gallery');
 
-    response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', form, {
-      headers: {
-        Cookie: datas.cookies,
-        "Content-Type": "text/html; charset=UTF-8",
-      },
-      responseType: "text"
-    });
-
+    await fetchLg('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', {
+      method: 'POST',
+      body: form
+    }, datas.cookies);
 
     const currentDate = dayjs();
-	const pastDate = currentDate.subtract(7, 'hour');
+    const pastDate = currentDate.subtract(7, 'hour');
 
     form = new FormData();
     form.append('csrf', datas.csrf);
@@ -584,20 +953,32 @@ app.post('/createNewGallery', async (req, res) => {
     form.append('id', data.gallery_id);
     form.append('post[cms_page_blog_id]', '1');
     form.append('publish_date', publicDate);
-    form.append('post[publish][month]', dayjs(publicDate).month() + 1);
-    form.append('post[publish][day]', dayjs(publicDate).date());
-    form.append('post[publish][year]', dayjs(publicDate).year());
+    form.append('post[publish][month]', (dayjs(publicDate).month() + 1).toString());
+    form.append('post[publish][day]', dayjs(publicDate).date().toString());
+    form.append('post[publish][year]', dayjs(publicDate).year().toString());
     form.append('post[publish][hour]', pastDate.format('h'));
     form.append('post[publish][minute]', pastDate.format('mm'));
     form.append('post[publish][meridian]', pastDate.format('A'));
 
-    response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', form, {
-      headers: {
-        Cookie: datas.cookies,
-        "Content-Type": "text/html; charset=UTF-8",
-      },
-      responseType: "text"
-    });
+    await fetchLg('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', {
+      method: 'POST',
+      body: form
+    }, datas.cookies);
+
+    postSlug = data.post_slug;
+
+    try {
+      const params = {
+        date: dayjs(publicDate).format("DD/MM/YYYY"),
+        name: game.name,
+        events: [`<p>-Added gallery <span style="color: rgb(255, 0, 0)">${galleryName}</span></p><p><a href="https://my.liquidandgrit.com/library/gallery/${postSlug}" rel="noopener noreferrer" target="_blank" style="color: rgb(17, 85, 204);">https://my.liquidandgrit.com/library/gallery/${postSlug}</a></p>`]
+      };
+      await axios.post(GOOGLE_SCRIPT_URL, params, {
+        headers: { "Content-Type": "application/json" }
+      });
+    } catch (gErr) {
+      console.error("❌ lỗi tạo google sheet:", gErr.message);
+    }
 
     res.json({
       success: true,
@@ -606,36 +987,14 @@ app.post('/createNewGallery', async (req, res) => {
         post_slug: data.post_slug
       }
     });
-
-    postSlug = data.post_slug;
-    // data.gallery_id
-    // data.post_slug
-
   } catch (err) {
     console.error("❌ lỗi tạo gallery:", err.message);
     res.status(500).json({ error: err.message });
-    return;
   }
-
-  try {
-     
-    const params = {
-      date: dayjs(publicDate).format("DD/MM/YYYY"),
-      name: game.name,
-      events: [`<p>-Added gallery <span style="color: rgb(255, 0, 0)">${galleryName}</span></p><p><a href="https://my.liquidandgrit.com/library/gallery/${postSlug}" rel="noopener noreferrer" target="_blank" style="color: rgb(17, 85, 204);">https://my.liquidandgrit.com/library/gallery/${postSlug}</a></p>`]
-    }
-
-    await axios.post(GOOGLE_SCRIPT_URL, params, {
-      headers: { "Content-Type": "application/json" }
-    });
-  } catch (err) {
-    console.error("❌ lỗi tạo goole sheet:", err.message);
-    res.status(500).json({ error: err.message });
-  }
-
 });
 
-app.post('/deleteEvent', (req, res) => {
+// POST /deleteEvent
+app.post('/deleteEvent', async (req, res) => {
   const { eventId } = req.body;
 
   if (!eventId) {
@@ -643,97 +1002,148 @@ app.post('/deleteEvent', (req, res) => {
   }
 
   try {
-    const deleteSql = `
-  DELETE FROM event 
-  WHERE id = $1 
-`;
-
-  // eventId là id của bản ghi bạn muốn xóa
-  db.query(deleteSql, [eventId], function (err) {
-    if (err) {
-      console.error('❌ Delete error:', err);
-      return res.status(500).json({ error: 'Lỗi khi xóa sự kiện.' });
-    }
-
-    // rowCount giúp bạn kiểm tra xem có bản ghi nào thực sự bị xóa không
-    // (ví dụ id không tồn tại thì rowCount sẽ bằng 0)
+    const deleteSql = `DELETE FROM event WHERE id = $1`;
+    await db.query(deleteSql, [eventId]);
     res.json({
       success: true,
       message: 'Xóa sự kiện thành công',
       deletedId: eventId
     });
-  });
   } catch (error) {
-     console.error("❌ Error ", err.message);
-    res.status(500).json({ error: err.message });
+    console.error("❌ Error deleteEvent:", error.message);
+    res.status(500).json({ error: error.message });
   }
 });
 
+const VIETNAMESE_DAYS = [
+  "Chủ nhật",
+  "Thứ hai",
+  "Thứ ba",
+  "Thứ tư",
+  "Thứ năm",
+  "Thứ sáu",
+  "Thứ bảy"
+];
+
+// POST /get_event_suggest
 app.post('/get_event_suggest', async (req, res) => {
   const { gameId, selectedDate } = req.body;
 
-  // 1. Kiểm tra đầu vào
   if (!gameId || !selectedDate) {
     return res.status(400).json({ error: 'Thiếu dữ liệu: gameId và selectedDate là bắt buộc.' });
   }
 
   try {
-    // 2. Tạo mảng 3 ngày liên tiếp (cách nhau 7 ngày) dùng dayjs
-    const base = dayjs(selectedDate);
-    const dates = [
-      base.subtract(7, 'day').format('YYYY/MM/DD'),  // 2026/03/20
-      base.subtract(14, 'day').format('YYYY/MM/DD'), // 2026/03/13
-      base.subtract(21, 'day').format('YYYY/MM/DD')  // 2026/03/06
-    ];
+    const cleanDateStr = selectedDate ? selectedDate.toString().replace(/\//g, '-') : '';
+    const baseDate = dayjs(cleanDateStr);
+    const formattedDate = baseDate.isValid() ? baseDate.format('YYYY-MM-DD') : selectedDate;
+    const parsedGameId = parseInt(gameId, 10);
 
-    // 3. SQL Query
     const selectSql = `
       SELECT DISTINCT 
-        EVENT.*, 
-        (ACTION.to::date - ACTION.from::date) AS days_diff 
-      FROM ACTION 
-      INNER JOIN EVENT ON EVENT.id = ACTION.EVENTId 
-      WHERE EVENT.gameid = $1 
-      AND ACTION.DATE::date = ANY($2::date[])
-      AND EVENT.id NOT IN (
-        SELECT EVENTId 
-        FROM ACTION 
-        WHERE DATE = $3
-      )
+        e.id,
+        e.name,
+        e.g_name,
+        e.gallery_id,
+        e.default_day,
+        e.post_slug,
+        COALESCE(NULLIF(a."from", ''), a.date)::date AS raw_from,
+        TO_CHAR(COALESCE(NULLIF(a."from", ''), a.date)::date, 'YYYY/MM/DD') AS "from",
+        TO_CHAR(COALESCE(NULLIF(a."to", ''), a.date)::date, 'YYYY/MM/DD') AS "to",
+        GREATEST(0, (COALESCE(NULLIF(a."to", ''), a.date)::date - COALESCE(NULLIF(a."from", ''), a.date)::date)) AS totalday,
+        CASE 
+          WHEN COALESCE(NULLIF(a."from", ''), a.date)::date = ($1::date - INTERVAL '7 days') THEN 'last-week'
+          WHEN COALESCE(NULLIF(a."from", ''), a.date)::date = ($1::date - INTERVAL '14 days') THEN 'two-weeks-ago'
+          WHEN COALESCE(NULLIF(a."from", ''), a.date)::date = ($1::date - INTERVAL '1 day') THEN 'day-back-1'
+          WHEN COALESCE(NULLIF(a."from", ''), a.date)::date = ($1::date - INTERVAL '2 days') THEN 'day-back-2'
+          WHEN COALESCE(NULLIF(a."from", ''), a.date)::date = ($1::date - INTERVAL '3 days') THEN 'day-back-3'
+          WHEN COALESCE(NULLIF(a."from", ''), a.date)::date = ($1::date - INTERVAL '4 days') THEN 'day-back-4'
+          WHEN COALESCE(NULLIF(a."from", ''), a.date)::date = ($1::date - INTERVAL '5 days') THEN 'day-back-5'
+          WHEN COALESCE(NULLIF(a."from", ''), a.date)::date = ($1::date - INTERVAL '6 days') THEN 'day-back-6'
+        END AS group_key
+      FROM action a
+      INNER JOIN event e ON e.id = a.eventid
+      WHERE e.gameid = $2
+        AND COALESCE(NULLIF(a."from", ''), a.date)::date IN (
+          $1::date - INTERVAL '7 days',
+          $1::date - INTERVAL '14 days',
+          $1::date - INTERVAL '1 day',
+          $1::date - INTERVAL '2 days',
+          $1::date - INTERVAL '3 days',
+          $1::date - INTERVAL '4 days',
+          $1::date - INTERVAL '5 days',
+          $1::date - INTERVAL '6 days'
+        )
+      ORDER BY raw_from DESC
     `;
 
-    // 4. Query DB (Dùng 'result' để không trùng với 'res' của Express)
-    const result = await db.query(selectSql, [gameId, dates, base.format('YYYY/MM/DD')]);
+    const result = await db.query(selectSql, [formattedDate, parsedGameId]);
+    const rows = result.rows;
 
-    // 5. Trả kết quả
-    return res.json(result.rows);
+    const getDayName = (d) => VIETNAMESE_DAYS[d.day()];
 
+    const groupDefs = [
+      { key: 'last-week', daysBack: 7, title: (d) => `📅 ${getDayName(d)} (Tuần trước)`, badgeTag: '1 tuần trước' },
+      { key: 'two-weeks-ago', daysBack: 14, title: (d) => `📅 ${getDayName(d)} (2 tuần trước)`, badgeTag: '2 tuần trước' },
+      { key: 'day-back-1', daysBack: 1, title: (d) => `🗓️ ${getDayName(d)} (Hôm qua)`, badgeTag: '-1 ngày' },
+      { key: 'day-back-2', daysBack: 2, title: (d) => `🗓️ ${getDayName(d)} (-2 ngày)`, badgeTag: '-2 ngày' },
+      { key: 'day-back-3', daysBack: 3, title: (d) => `🗓️ ${getDayName(d)} (-3 ngày)`, badgeTag: '-3 ngày' },
+      { key: 'day-back-4', daysBack: 4, title: (d) => `🗓️ ${getDayName(d)} (-4 ngày)`, badgeTag: '-4 ngày' },
+      { key: 'day-back-5', daysBack: 5, title: (d) => `🗓️ ${getDayName(d)} (-5 ngày)`, badgeTag: '-5 ngày' },
+      { key: 'day-back-6', daysBack: 6, title: (d) => `🗓️ ${getDayName(d)} (-6 ngày)`, badgeTag: '-6 ngày' }
+    ];
+
+    const responseGroups = [];
+
+    for (const def of groupDefs) {
+      const targetDate = baseDate.subtract(def.daysBack, 'day');
+      const matchingRows = rows.filter(r => r.group_key === def.key);
+
+      if (matchingRows.length > 0) {
+        responseGroups.push({
+          key: def.key,
+          title: def.title(targetDate),
+          dateStr: targetDate.format('DD/MM/YYYY'),
+          badgeTag: def.badgeTag,
+          events: matchingRows.map((r, idx) => ({
+            key: `suggest-${def.key}-${r.id}-${idx}`,
+            id: r.id.toString(),
+            name: r.name || '',
+            g_name: r.g_name || '',
+            gallery_id: r.gallery_id,
+            default_day: r.default_day,
+            post_slug: r.post_slug || '',
+            from: r.from,
+            to: r.to,
+            totalday: typeof r.totalday === 'number' ? r.totalday : parseInt(r.totalday || 0, 10)
+          }))
+        });
+      }
+    }
+
+    return res.json(responseGroups);
   } catch (err) {
-    console.error('Lỗi server:', err.message);
-    return res.status(500).json({ error: 'Internal Server Error' });
+    console.error('Lỗi server /get_event_suggest:', err.message);
+    return res.status(500).json({ error: 'Internal Server Error', details: err.message });
   }
 });
-app.post('/event', (req, res) => {
+
+// POST /event
+app.post('/event', async (req, res) => {
   const { name, gallery_id, g_name, gameId, default_day, eventId, post_slug } = req.body;
 
   if (!name || !gallery_id) {
     return res.status(400).json({ error: 'Thiếu dữ liệu: name, gallery_id là bắt buộc.' });
   }
 
-  if (eventId) {
-    // Trường hợp UPDATE
-    // Thay ? bằng $1, $2...
-    const updateSql = `
-      UPDATE event 
-      SET name = $1, gallery_id = $2, g_name = $3, gameid = $4, default_day = $5, post_slug = $7
-      WHERE id = $6
-    `;
-    db.query(updateSql, [name, gallery_id, g_name, gameId, default_day == '' ? null : default_day, eventId, post_slug], function (err) {
-      if (err) {
-        console.error('❌ Update error:', err);
-        return res.status(500).json({ error: 'Lỗi khi cập nhật sự kiện.' });
-      }
-
+  try {
+    if (eventId) {
+      const updateSql = `
+        UPDATE event 
+        SET name = $1, gallery_id = $2, g_name = $3, gameid = $4, default_day = $5, post_slug = $7
+        WHERE id = $6
+      `;
+      await db.query(updateSql, [name, gallery_id, g_name, gameId, default_day === '' ? null : default_day, eventId, post_slug]);
       res.json({
         success: true,
         lastedId: eventId,
@@ -741,21 +1151,12 @@ app.post('/event', (req, res) => {
         gallery_id,
         g_name
       });
-    });
-  } else {
-    // Trường hợp INSERT
-    // Postgres cần RETURNING id để lấy ID vừa tạo
-    const insertSql = `
-      INSERT INTO event (gameid, name, gallery_id, default_day, g_name, post_slug)
-      VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
-    `;
-    db.query(insertSql, [gameId, name, gallery_id, default_day == '' ? null : default_day, g_name, post_slug], function (err, resDb) {
-      if (err) {
-        console.error('❌ Insert error:', err);
-        return res.status(500).json({ error: 'Lỗi khi thêm sự kiện.' });
-      }
-
-      // Postgres trả ID trong result.rows
+    } else {
+      const insertSql = `
+        INSERT INTO event (gameid, name, gallery_id, default_day, g_name, post_slug)
+        VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
+      `;
+      const resDb = await db.query(insertSql, [gameId, name, gallery_id, default_day === '' ? null : default_day, g_name, post_slug]);
       res.json({
         success: true,
         lastedId: resDb.rows[0].id,
@@ -763,85 +1164,63 @@ app.post('/event', (req, res) => {
         gallery_id,
         g_name
       });
-    });
+    }
+  } catch (err) {
+    console.error('❌ Query error in /event:', err.message);
+    res.status(500).json({ error: 'Lỗi khi lưu sự kiện.' });
   }
 });
 
-
+// POST /action
 app.post('/action', async (req, res) => {
-  const { id, event_id, date, from, to, type, gameId } = req.body;
-
-  let str = '';
+  const { id, event_id, date, from, to, type } = req.body;
 
   if (!event_id || !date) {
-        return res.status(400).json({ error: 'Missing required fields' });
+    return res.status(400).json({ error: 'Missing required fields' });
   }
 
   const event = await getEventByIdAsync(event_id);
+  let str = '';
 
   try {
-    if (type != 'nochanged') {
-
+    if (type !== 'nochanged') {
       if (!event) {
         return res.status(400).json({ error: 'không tìm thấy event' });
       }
 
-      const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
-      console.log(datas);
-
-      if (datas.length === 0) {
-        res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
-        return;
+      const datas = await getStoredCookies();
+      if (!datas || Object.keys(datas).length === 0) {
+        return res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
       }
 
       let form = new FormData();
       form.append('csrf', datas.csrf);
-
       form.append('action', "getEventsById");
       form.append('plugin', "event");
       form.append('cms_page_blog_gallery_id', event.gallery_id);
 
-
-
-
-      console.log("bat dau goi");
-
-      let response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/plugin', form, {
-        headers: {
-          Cookie: datas.cookies,
-          "Content-Type": "text/html; charset=UTF-8",
-        },
-        responseType: "text"
-      });
-
-      let data = JSON.parse(response.data);
-
+      let data = await fetchLgJson('https://my.liquidandgrit.com/action/admin/cms/plugin', {
+        method: 'POST',
+        body: form
+      }, datas.cookies);
 
       form = new FormData();
       form.append('csrf', datas.csrf);
-
       form.append('end', dayjs(to).format("MMMM D, YYYY"));
       form.append('start', dayjs(from).format("MMMM D, YYYY"));
       form.append('plugin', "event");
-      form.append('name', (event.g_name || '') != '' ? event.name : '');
+      form.append('name', (event.g_name || '') !== '' ? event.name : '');
       form.append('action', "event_add_item");
-      form.append('order_index', data.events.length);
+      form.append('order_index', data.events ? data.events.length : 0);
       form.append('cms_page_blog_gallery_id', event.gallery_id);
 
-      response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/plugin', form, {
-        headers: {
-          Cookie: datas.cookies,
-          "Content-Type": "text/html; charset=UTF-8",
-        },
-        responseType: "text"
-      });
+      data = await fetchLgJson('https://my.liquidandgrit.com/action/admin/cms/plugin', {
+        method: 'POST',
+        body: form
+      }, datas.cookies);
 
-      data = JSON.parse(response.data);
-
-      console.log(data);
-
-      let strDate = ''
-      if(from == to) {
+      let strDate = '';
+      if (from === to) {
         strDate = `${dayjs(from).date()}`;
       } else if (dayjs(from).month() === dayjs(to).month()) {
         strDate = `${dayjs(from).date()}-${dayjs(to).date()}`;
@@ -849,105 +1228,83 @@ app.post('/action', async (req, res) => {
         strDate = `${dayjs(from).date()}-${dayjs(to).month() + 1}/${dayjs(to).date()}`;
       }
 
-      const extra = type == 'image' ? `/ image ` : (type == 'video' ? '/ image/ video ' : '');
-      str = (event.g_name || '') != '' ? `-Added tracker date ${extra}for ${event.g_name} ( ${event.name} ) (${strDate})` : `-Added tracker date ${extra}for ${event.name} (${strDate})`
-
-
+      const extra = type === 'image' ? `/ image ` : (type === 'video' ? '/ image/ video ' : '');
+      str = (event.g_name || '') !== '' ? `-Added tracker date ${extra}for ${event.g_name} ( ${event.name} ) (${strDate})` : `-Added tracker date ${extra}for ${event.name} (${strDate})`;
     } else {
       str = 'No Change';
     }
 
     const params = {
       date: dayjs(date).format("DD/MM/YYYY"),
-      name: event.game_name,
+      name: event?.game_name || '',
       events: [str]
-    }
+    };
 
-    response = await axios.post(GOOGLE_SCRIPT_URL, params, {
+    await axios.post(GOOGLE_SCRIPT_URL, params, {
       headers: { "Content-Type": "application/json" }
     });
-
-    console.log("thanh cong")
-    // res.json({ success: true, result: response.data });
-    // return;
-
-
   } catch (err) {
     console.error("❌ Error calling Google Sheet:", err.message);
-    res.status(500).json({ error: err.message });
-    return;
+    return res.status(500).json({ error: err.message });
   }
 
-
-  if (id) {
-    // Nếu có ID, kiểm tra xem đã thành công chưa
-    const checkSql = `SELECT status FROM action WHERE id = $1`;
-    db.query(checkSql, [id], (err, resDb) => {
-      if (err) return res.status(500).json({ error: err.message });
+  try {
+    if (id) {
+      const checkSql = `SELECT status FROM action WHERE id = $1`;
+      const resDb = await db.query(checkSql, [id]);
       const row = resDb.rows[0];
 
       if (row && row.status === '1') {
-        // Nếu đã thành công thì bỏ qua
         return res.json({ id, status: row.status, message: "Already successful. No update." });
       }
 
-      // Nếu chưa thành công → update và đặt lại status = '0'
       const updateSql = `
         UPDATE action
         SET eventid = $1, date = $2, "from" = $3, "to" = $4, status = '1'
         WHERE id = $5
       `;
-      db.query(updateSql, [event_id, date, from || '', to || '', id], function (err2) {
-        if (err2) return res.status(500).json({ error: err2.message });
-        res.json({ id, status: '1', message: "Updated" });
-      });
-    });
-
-  } else {
-    // Nếu không có ID → insert mới với status = '1'
-    const insertSql = `
-      INSERT INTO action (eventid, date, status, "from", "to", type)
-      VALUES ($1, $2, '1', $3, $4, $5) RETURNING id
-    `;
-    db.query(insertSql, [event_id, date, from || '', to || '', type], function (err3, resDb) {
-      if (err3) return res.status(500).json({ error: err3.message });
-      res.json({ id: resDb.rows[0].id, status: '1', message: "Inserted" });
-    });
+      await db.query(updateSql, [event_id, date, from || '', to || '', id]);
+      return res.json({ id, status: '1', message: "Updated" });
+    } else {
+      const insertSql = `
+        INSERT INTO action (eventid, date, status, "from", "to", type)
+        VALUES ($1, $2, '1', $3, $4, $5) RETURNING id
+      `;
+      const resDb = await db.query(insertSql, [event_id, date, from || '', to || '', type]);
+      return res.json({ id: resDb.rows[0].id, status: '1', message: "Inserted" });
+    }
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
   }
 });
 
-// ROUTE NÀY THAY ĐỔI NHIỀU NHẤT VÌ POSTGRES KHÔNG CÓ db.serialize
+// POST /actions
 app.post('/actions', async (req, res) => {
   const records = req.body;
   if (!Array.isArray(records)) return res.status(400).json({ error: 'Payload must be an array' });
   if (records.length === 0) return res.json([]);
 
-  // Dùng Async/Await để xử lý Transaction trong Postgres
-  const client = await db.connect(); // Mượn client để transaction an toàn hơn
+  const client = await db.connect();
   try {
-    await client.query("BEGIN"); // BEGIN TRANSACTION
-
+    await client.query("BEGIN");
     const results = [];
 
-    // Duyệt qua từng record
     for (const record of records) {
       const { id, event_id, date, from, to, status, isDelete, type } = record;
 
       if (id) {
-        // Check status
         const resCheck = await client.query(`SELECT status FROM action WHERE id = $1`, [id]);
         const row = resCheck.rows[0];
 
         if (row?.status === '1') {
           results.push({ id, status: '1', message: 'Already success. Skipped.' });
-          continue; // Bỏ qua vòng lặp này
+          continue;
         }
 
         if (isDelete) {
           await client.query(`DELETE FROM action WHERE id = $1`, [id]);
           results.push({ id, status: status || '0' });
         } else {
-          // Update
           await client.query(
             `UPDATE action SET eventid = $1, date = $2, "from" = $3, "to" = $4, status = $5, type=$6 WHERE id = $7`,
             [event_id, date, from || '', to || '', status || '0', type, id]
@@ -955,7 +1312,6 @@ app.post('/actions', async (req, res) => {
           results.push({ id, status: status || '0' });
         }
       } else {
-        // INSERT
         const resInsert = await client.query(
           `INSERT INTO action (eventid, date, status, "from", "to", type) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
           [event_id, date, status || '0', from || '', to || '', type]
@@ -964,660 +1320,325 @@ app.post('/actions', async (req, res) => {
       }
     }
 
-    await client.query("COMMIT"); // Commit nếu mọi thứ ok
+    await client.query("COMMIT");
     res.json(results);
-
   } catch (err) {
-    await client.query("ROLLBACK"); // Rollback nếu lỗi
-    console.error("Transaction Error:", err);
+    await client.query("ROLLBACK");
+    console.error("Transaction Error:", err.message);
     res.status(500).json({ error: 'Transaction failed', details: err.message });
   } finally {
-    client.release(); // Trả kết nối về pool
+    client.release();
   }
 });
 
-
-function getGameByIdAsync(gameId) {
-
-  return new Promise((resolve, reject) => {
-    // Postgres dùng $1
-    db.query("SELECT * from games WHERE id = $1", [gameId], (err, resDb) => {
-      if (err) return reject(err);
-      if (!resDb.rows[0]) return resolve(null);
-
-      const row = resDb.rows[0];
-
-      const eventObject = {
-        ...row,
-        tagId: row.tagId, // Cẩn thận case-sensitive: DB Postgres thường trả về lowercase cột (tagid)
-      };
-
-      resolve(eventObject);
-    });
-  });
-}
-
+// POST /show-data
 app.post('/show-data', async (req, res) => {
   const { gameId, startDate } = req.body;
   try {
-    const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
-
-    if (datas.length === 0) {
-      res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
-      return;
+    const datas = await getStoredCookies();
+    if (!datas || Object.keys(datas).length === 0) {
+      return res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
     }
 
-    let tagId = ''
-
+    let tagId = '';
     const game = await getGameByIdAsync(gameId);
-
     if (game) {
-      // Lưu ý: Postgres thường trả về tên cột thường. Hãy check DB nếu cột là tagId hay tagid
       tagId = game.tagId || game.tagid;
     }
 
-    // tagId = '1552'
     const currentDate = dayjs();
-    // const prevDate = currentDate.subtract(30, 'day')
-
-    const obj = JSON.parse('{"date_range": ["2025-12-23", "2026-01-21"], "search": "", "view": ["activity"], "tag26": ["136034"], "limit": 4000, "tag18": ["684110"], "init": 0, "page": 0, "category2": [], "tag37": [], "tag38": [], "tag28": []}');
-    obj.date_range = [startDate, currentDate.add(30,"day").format('YYYY-MM-DD')];
+    const obj = JSON.parse('{"date_range": ["2025-12-23", "2026-01-21"], "search": "", "view": ["activity"], "tag26": ["136034"], "limit": 500, "tag18": ["684110"], "init": 0, "page": 0, "category2": [], "tag37": [], "tag38": [], "tag28": []}');
+    obj.date_range = [startDate, currentDate.add(30, "day").format('YYYY-MM-DD')];
     obj.tag18 = [tagId.toString()];
-    obj.limit = (Math.floor(Math.random() * (5000 - 100 + 1)) + 100).toString()
-    let form = new FormData();
+    obj.limit = "500";
 
+    const form = new FormData();
     form.append('csrf', datas.csrf);
     form.append('plugin', 'event');
     form.append('action', 'searchItem');
     form.append('vo-action', '');
-    form.append('filter_conditions', JSON.stringify(obj))
+    form.append('filter_conditions', JSON.stringify(obj));
 
-    console.log(form);
-
-    let response = await axios.post('https://my.liquidandgrit.com/action/public/cms/plugin', form, {
-      headers: {
-        Cookie: datas.cookies,
-        "Content-Type": "text/html; charset=UTF-8",
-      },
-      responseType: "text"
-    });
-
-    let data = JSON.parse(response.data);
+    const responseData = await fetchLgJson('https://my.liquidandgrit.com/action/public/cms/plugin', {
+      method: 'POST',
+      body: form
+    }, datas.cookies);
 
     res.json({
       success: true,
-      content_html: data.content_html
+      content_html: responseData.content_html || "ok"
     });
-
-
   } catch (error) {
-    console.error("❌ Error ", err.message);
-    res.status(500).json({ error: err.message });
+    console.error("❌ Error in /show-data:", error.message);
+    res.status(500).json({ error: error.message });
   }
-
 });
 
+// POST /vewImage
 app.post('/vewImage', async (req, res) => {
   const { event_id } = req.body;
-  try {
-    const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
 
-    console.log(datas);
-    if (datas.length === 0) {
-      res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
-      return;
+  try {
+    const datas = await getStoredCookies();
+    if (!datas || Object.keys(datas).length === 0) {
+      return res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
     }
 
-
-
     let form = new FormData();
-
     form.append('csrf', datas.csrf);
     form.append('id', event_id);
 
-    let response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', form, {
-      headers: {
-        Cookie: datas.cookies,
-        "Content-Type": "text/html; charset=UTF-8",
-      },
-      responseType: "text"
-    });
+    const data = await fetchLgJson('https://my.liquidandgrit.com/action/admin/cms/blog/gallery-edit', {
+      method: 'POST',
+      body: form
+    }, datas.cookies);
 
-    const data = JSON.parse(response.data);
-
-    if(!data.published_version) {
-      res.status(500).json({ error: "Chưa publish gallery" });
-      return;
+    if (!data.published_version) {
+      return res.status(500).json({ error: "Chưa publish gallery" });
     }
+
     form = new FormData();
     form.append('blog_id', '1');
     form.append('gallery_version_id', data.published_version);
     form.append('image_size_array', '{"large": {"x": 940, "y": 625}, "small": {"x": 300, "y": 300}}');
-    form.append('preview_mode', false);
+    form.append('preview_mode', 'false');
     form.append('csrf', datas.csrf);
 
-    response = await axios.post('https://my.liquidandgrit.com/action/public/cms/blog/get-gallery', form, {
-      headers: {
-        Cookie: datas.cookies,
-        "Content-Type": "text/html; charset=UTF-8",
-      },
-      responseType: "text"
-    });
+    const galleryRes = await fetchLgJson('https://my.liquidandgrit.com/action/public/cms/blog/get-gallery', {
+      method: 'POST',
+      body: form
+    }, datas.cookies);
 
-
-
-    res.json({ success: true, result: JSON.parse(response.data)});
-
+    res.json({ success: true, result: galleryRes });
   } catch (err) {
-    console.error("❌ Error calling Google Sheet:", err.message);
+    console.error("❌ Error view image:", err.message);
     res.status(500).json({ error: err.message });
-    return;
   }
-
 });
 
+// POST /check_item
 app.post('/check_item', async (req, res) => {
   const { checkData, gameId, selectedDate } = req.body;
-  try {
-    const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
 
-    if (datas.length === 0) {
-      res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
-      return;
+  try {
+    const datas = await getStoredCookies();
+    if (!datas || Object.keys(datas).length === 0) {
+      return res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
     }
 
     if (checkData && checkData.length === 0) {
-      res.status(500).json({ error: 'No check data found.' });
-      return;
+      return res.status(500).json({ error: 'No check data found.' });
     }
 
-    let tagId = ''
-
+    let tagId = '';
     const game = await getGameByIdAsync(gameId);
-
     if (game) {
-      // Lưu ý: Postgres thường trả về tên cột thường. Hãy check DB nếu cột là tagId hay tagid
       tagId = game.tagId || game.tagid;
     }
 
-    // tagId = '1552'
     const currentDate = dayjs();
-    const prevDate = currentDate.subtract(30, 'day')
+    const prevDate = currentDate.subtract(30, 'day');
 
-    const obj = JSON.parse('{"date_range": ["2025-12-23", "2026-01-21"], "search": "", "view": ["activity"], "tag26": ["136034"], "limit": 4000, "tag18": ["684110"], "init": 0, "page": 0, "category2": [], "tag37": [], "tag38": [], "tag28": []}');
-    obj.date_range = [prevDate.format('YYYY-MM-DD'), currentDate.add(30,"day").format('YYYY-MM-DD')];
+    const obj = JSON.parse('{"date_range": ["2025-12-23", "2026-01-21"], "search": "", "view": ["activity"], "tag26": ["136034"], "limit": 300, "tag18": ["684110"], "init": 0, "page": 0, "category2": [], "tag37": [], "tag38": [], "tag28": []}');
+    obj.date_range = [prevDate.format('YYYY-MM-DD'), currentDate.add(30, "day").format('YYYY-MM-DD')];
     obj.tag18 = [tagId.toString()];
-    obj.limit = (Math.floor(Math.random() * (5000 - 100 + 1)) + 100).toString()
-    console.log(obj);
-    
-    let form = new FormData();
+    obj.limit = "300";
 
+    const form = new FormData();
     form.append('csrf', datas.csrf);
     form.append('plugin', 'event');
     form.append('action', 'searchItem');
     form.append('vo-action', '');
-    form.append('filter_conditions', JSON.stringify(obj))
+    form.append('filter_conditions', JSON.stringify(obj));
 
-    // console.log(form);
+    const data = await fetchLgJson('https://my.liquidandgrit.com/action/public/cms/plugin', {
+      method: 'POST',
+      body: form
+    }, datas.cookies);
 
-    let response = await axios.post('https://my.liquidandgrit.com/action/public/cms/plugin', form, {
-      headers: {
-        Cookie: datas.cookies,
-        "Content-Type": "text/html; charset=UTF-8",
-      },
-      responseType: "text"
-    });
-
-    let data = JSON.parse(response.data);
-    // console.log(data);
-
-    const $ = cheerio.load(data.content_html);
-    const rows = $('table.table-cnd tbody tr');
+    const extractedRows = parseCndTableRows(data.content_html);
 
     const resultData = [];
     for (let index = 0; index < checkData.length; index++) {
       const item = checkData[index];
-      if(item == '') continue;
+      if (item === '') continue;
 
-      const data = parseTrackerItem(item);
+      const parsedData = parseTrackerItem(item);
+      const ret = { name: item, details: [] };
+      let cnt = 0;
 
-      const ret = {
-        name: item,
-      };
-      
-      ret.details = [];
-      
-
-      // const indexesToRemove = [];
-      let cnt = 0
-      if (!data || !data?.startDateObj || !data?.eventName) {
-
-       
-
-        if(data?.eventName != '') {
-          const result = await fetchGalleryInfo(`${data.eventName} - ${game.app_name}`, gameId, true);
-
-        
-          for (let index = 0; index < result.length; index++) {
-            const element  = result[index];
-            const obj = {};
-            obj.url = element.permalink;
-            obj.editLink = `https://my.liquidandgrit.com/admin/cms/blog/?page=8&gallery-edit-instance=${element.id}`;
-            obj.viewImage = `/vewImage/${element.id}`;
-            obj.galleryId = element.id;
-            
-            ret.details.push(obj);
+      if (!parsedData || !parsedData.startDateObj || !parsedData.eventName) {
+        if (parsedData?.eventName !== '') {
+          const result = await fetchGalleryInfoCached(`${parsedData.eventName} - ${game.app_name}`, gameId, '', true);
+          for (let idx = 0; idx < result.length; idx++) {
+            const element = result[idx];
+            ret.details.push({
+              url: element.permalink,
+              editLink: `https://my.liquidandgrit.com/admin/cms/blog/?page=8&gallery-edit-instance=${element.id}`,
+              viewImage: `/vewImage/${element.id}`,
+              galleryId: element.id
+            });
           }
         } else {
-         const obj = {};
-        obj.url = data?.url;
-           ret.details.push(obj);
+          ret.details.push({ url: parsedData?.url });
         }
-        
-     
         cnt = 1;
-
       } else {
-        rows.each((i, row) => {
-          //console.log(i);
+        const startText = parsedData.startDateObj.format('MMMM D, YYYY');
+        const endText = parsedData.endDateObj.format('MMMM D, YYYY');
+        const eventNameLower = parsedData.eventName.toLowerCase().trim();
+        const subEventLower = (parsedData.subEvent || '').toLowerCase().trim();
 
-          const cells = $(row).find('td');
-
-          if ($(cells[0])?.text() == data.startDateObj.format('MMMM D, YYYY')
-            && $(cells[1])?.text() == data.endDateObj.format('MMMM D, YYYY')
-            && $(cells[4])?.text().toLowerCase().trim().includes(data.eventName.toLowerCase().trim())
-            && (data.subEvent || '').toLowerCase().trim() == $(cells[5])?.text().toLowerCase().trim()
+        for (const rowData of extractedRows) {
+          if (rowData.col0 === startText
+            && rowData.col1 === endText
+            && rowData.col4.toLowerCase().includes(eventNameLower)
+            && rowData.col5.toLowerCase() === subEventLower
           ) {
-            // indexesToRemove.push(i);
             cnt++;
-          } else if (cnt > 1) {
-            return false; // break loop
+            if (cnt > 1) break;
           }
-        });
+        }
 
-        // console.log(`${data.eventName} - ${game.app_name}`);
+        ret.data = parsedData;
+        const result = await fetchGalleryInfoCached(parsedData.eventName, gameId, game.app_name, true);
 
-        ret.data = data;
-
-        const result = await fetchGalleryInfo(data.eventName, gameId, game.app_name, true);
-
-        
-        for (let index = 0; index < result.length; index++) {
-          const element  = result[index];
-          const obj = {};
-          obj.url = element.permalink;
-          obj.editLink = `https://my.liquidandgrit.com/admin/cms/blog/?page=8&gallery-edit-instance=${element.id}`;
-          obj.viewImage = `/vewImage/${element.id}`;
-          obj.galleryId = element.id;
-          
-          ret.details.push(obj);
+        for (let idx = 0; idx < result.length; idx++) {
+          const element = result[idx];
+          ret.details.push({
+            url: element.permalink,
+            editLink: `https://my.liquidandgrit.com/admin/cms/blog/?page=8&gallery-edit-instance=${element.id}`,
+            viewImage: `/vewImage/${element.id}`,
+            galleryId: element.id
+          });
         }
       }
 
       ret.cnt = cnt;
-      ret.valid = cnt == 1;
+      ret.valid = cnt === 1;
       resultData.push(ret);
-    };
+    }
 
+    const selectedDateStr = dayjs(selectedDate).format('MMMM D, YYYY');
     const daysevent = [];
-    rows.each((i, row) => {
-      const cells = $(row).find('td');
-
-      if ($(cells[0])?.text() == dayjs(selectedDate).format('MMMM D, YYYY')){
+    for (const rowData of extractedRows) {
+      if (rowData.col0 === selectedDateStr) {
         daysevent.push({
           start: dayjs(selectedDate).date(),
-          to: dayjs($(cells[1])?.text(), 'MMMM D, YYYY').date(),
-          eventName: $(cells[4])?.text().split(' - ')[0],
-          subEvent: $(cells[5])?.text(),
-          appName: $(cells[4])?.text()
-        })
+          to: dayjs(rowData.col1, 'MMMM D, YYYY').date(),
+          eventName: rowData.col4.split(' - ')[0],
+          subEvent: rowData.col5,
+          appName: rowData.col4
+        });
       }
-    });
+    }
 
     const excludes = daysevent.filter(item => {
-      const matched = resultData.find(r => r.data?.eventName.toLowerCase().trim() == item.eventName.toLowerCase().trim() && r.data?.subEvent.toLowerCase().trim() == item.subEvent.toLowerCase().trim());
+      const matched = resultData.find(r => r.data?.eventName.toLowerCase().trim() === item.eventName.toLowerCase().trim() && r.data?.subEvent.toLowerCase().trim() === item.subEvent.toLowerCase().trim());
       return !matched;
     });
 
     for (const item of excludes) {
-
       const ret = {
-        name: `${item.eventName} ${item.subEvent == '' ? '' : '('+ item.subEvent +')'} (${item.start}-${item.to})( Other )`,  
+        name: `${item.eventName} ${item.subEvent === '' ? '' : '(' + item.subEvent + ')'} (${item.start}-${item.to})( Other )`,
+        details: []
       };
 
-       ret.details = [];
-       
-      const result = await fetchGalleryInfo(item.appName, gameId);
-        if (result?.id) {
-          
-          const obj = {};
-          obj.url = result.permalink;
-          obj.editLink = `https://my.liquidandgrit.com/admin/cms/blog/?page=8&gallery-edit-instance=${result.id}`;
-          obj.viewImage = `/vewImage/${result.id}`;
-          obj.galleryId = result.id;
-          
-          ret.details.push(obj);
-        }
-
+      const result = await fetchGalleryInfoCached(item.appName, gameId);
+      if (result?.id) {
+        ret.details.push({
+          url: result.permalink,
+          editLink: `https://my.liquidandgrit.com/admin/cms/blog/?page=8&gallery-edit-instance=${result.id}`,
+          viewImage: `/vewImage/${result.id}`,
+          galleryId: result.id
+        });
+      }
       resultData.push(ret);
     }
 
-    // console.log(resultData);
-    res.json({
-      success: true,
-      resultData
-    });
-    // res.json(Object.values(matchedRows));
-
+    res.json({ success: true, resultData });
   } catch (err) {
-    console.error("❌ Error ", err.message);
+    console.error("❌ Error in /check_item:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
+
+// POST /search-gallery
 app.post('/search-gallery', async (req, res) => {
   const { search_keyword, gameId } = req.body;
+
   try {
     if (!gameId) {
-      res.status(500).json({ error: 'Tim theo game truoc' });
-      return;
-    };
-    const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
-
-    if (datas.length === 0) {
-      res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
-      return;
+      return res.status(500).json({ error: 'Tim theo game truoc' });
     }
 
-    let tagId = ''
+    const datas = await getStoredCookies();
+    if (!datas || Object.keys(datas).length === 0) {
+      return res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
+    }
 
+    let tagId = '';
     const game = await getGameByIdAsync(gameId);
-
     if (game) {
-      // Lưu ý: Postgres thường trả về tên cột thường. Hãy check DB nếu cột là tagId hay tagid
       tagId = game.tagId || game.tagid;
     }
 
     const obj = JSON.parse('{"category": [], "page": 0, "sort": ["publish_date", "desc"], "tag26": ["136034"], "tag_group_data": 1, "matrix_app_features": 0, "date_range": "", "limit": 0, "init": 0, "tag37": [], "tag38": [], "tag34": [], "tag28": [], "tag18": [], "tag29": [], "tag36": [], "tag45": [], "tag9": [], "tag42": [], "tag32": [], "tag4": [], "tag1": [], "tag2": [], "tag3": [], "tag10": [], "tag12": [], "tag7": [], "tag8": [], "tag11": [], "tag43": [], "tag13": [], "tag22": [], "tag21": [], "search": ""}');
     obj.tag18 = [tagId.toString()];
-    let form = new FormData();
 
+    const form = new FormData();
     form.append('csrf', datas.csrf);
-
     form.append('cnd_config_dir', "/cms/blog/gallery");
     form.append('config_case', "gallery");
     form.append('id', '1');
     form.append('vo-action', '');
-    form.append('filter_conditions', JSON.stringify(obj))
+    form.append('filter_conditions', JSON.stringify(obj));
 
-    console.log(form);
+    const data = await fetchLgJson('https://my.liquidandgrit.com/action/public/cms/blog/cnd', {
+      method: 'POST',
+      body: form
+    }, datas.cookies);
 
-
-    console.log("bat dau goi");
-
-    let response = await axios.post('https://my.liquidandgrit.com/action/public/cms/blog/cnd', form, {
-      headers: {
-        Cookie: datas.cookies,
-        "Content-Type": "text/html; charset=UTF-8",
-      },
-      responseType: "text"
-    });
-
-    let data = JSON.parse(response.data);
-    // console.log(data);
-
-    const $ = cheerio.load(data.content_html);
-    const rows = $('table.view-data tbody tr');
-
-    const matchedRows = [];
-
-    rows.each((i, row) => {
-      const link = $(row).find('td a.vo-permalink-url');
-      const cells = $(row).find('td');
-
-      // console.log(link.attr('data-info'));
-
-      // console.log(link.attr('href'));
-
-      if (
-        (search_keyword || '') === '' ||
-        $(cells[0]).text().toLowerCase().includes(search_keyword.toLowerCase()) ||
-        $(cells[2]).text().toLowerCase().includes(search_keyword.toLowerCase())
-      ) {
-        matchedRows.push({
-          title: $(cells[0]).text(),
-          href: link.attr('href'),
-          sub: $(cells[2]).text(),
-        })
-      }
-
-      // console.log($(cells[0]).text(), $(cells[2]).text());
-    });
-
-    res.json(Object.values(matchedRows));
-
-
+    const matchedRows = parseSearchGalleryRows(data.content_html, search_keyword);
+    res.json(matchedRows);
   } catch (err) {
-    console.error("❌ Error ", err.message);
+    console.error("❌ Error search gallery:", err.message);
     res.status(500).json({ error: err.message });
-    return;
   }
 });
 
+// POST /get-gallery-info
 app.post('/get-gallery-info', async (req, res) => {
   const { galleryName, gameId } = req.body;
+
   try {
     if (!galleryName || !gameId) {
-      res.status(500).json({ error: 'Nhập input truoc' });
-      return;
-    };
+      return res.status(500).json({ error: 'Nhập input truoc' });
+    }
 
     const result = await fetchGalleryInfo(galleryName, gameId);
-
     res.json(result);
-
   } catch (err) {
-    console.error("❌ Error ", err.message);
+    console.error("❌ Error get-gallery-info:", err.message);
     res.status(500).json({ error: err.message });
-    return;
   }
-
 });
 
-const fetchGalleryInfo = async (galleryName, gameId, gameName = '', retList = false) => {
-  const datas = fs.existsSync('cookies.json') ? JSON.parse(fs.readFileSync('cookies.json')) : [];
-
-  if (datas.length === 0) {
-    res.status(500).json({ error: 'No cookies or CSRF token found. Please login first.' });
-    return;
-  }
-
-  let tagId = ''
-
-  const game = await getGameByIdAsync(gameId);
-
-  if (game) {
-    tagId = game.tagId || game.tagid;
-  }
-
-  const obj = JSON.parse('{"limit": 10000000, "init": 0, "page": 0, "type": [], "status": [], "category": [], "non_category": [], "tag37": [], "tag38": [], "tag28": [], "tag34": [], "tag18": ["768367"], "tag35": [], "tag21": [], "tag29": [], "tag36": [], "tag22": [], "tag26": [], "tag45": [], "tag42": [], "tag9": [], "tag32": [], "tag4": [], "tag1": [], "tag2": [], "tag3": [], "tag10": [], "tag12": [], "tag7": [], "tag8": [], "tag11": [], "tag43": [], "tag13": [], "search": ""}');
-  obj.tag18 = [tagId.toString()];
-  obj.search = galleryName;
-
-  let form = new FormData();
-  form.append('csrf', datas.csrf);
-  form.append('id', '1');
-  form.append('vo-action', '');
-  form.append('filter_conditions', JSON.stringify(obj))
-
-
-
-  // console.log("bat dau goi");
-
-  let response = await axios.post('https://my.liquidandgrit.com/action/admin/cms/blog/post-cnd', form, {
-    headers: {
-      Cookie: datas.cookies,
-      "Content-Type": "text/html; charset=UTF-8",
-    },
-    // responseType: "text"
-  });
-
-  // let data = JSON.parse(response.data);
-  // console.log(response.data);
-
-  const contentList = response.data && response.data.content ? response.data.content : [];
-
-  if(!retList) {
-     const foundItem = contentList.find(item => item.name.toLowerCase() == galleryName.toLowerCase());
-
-  return foundItem || {};
-
-  } 
-
-  return contentList.filter(item => `${galleryName} - ${gameName}`.toLowerCase().toLowerCase().includes(item.name.toLowerCase()));
-}
-
-const calculateDateRange = (dateRangeStr) => {
-  // 1. CHECK AN TOÀN: Nếu không có chuỗi hoặc không phải string -> Trả về null ngay
-  if (!dateRangeStr || typeof dateRangeStr !== 'string' || !dateRangeStr.trim()) {
-    return null; // Hoặc return { startDate: null, endDate: null } tùy logic của bạn
-  }
-
-  const currentDay = dayjs().date();
-  const currentYear = dayjs().year();
-  const currentMonth = dayjs().month() + 1; // 1-12
-
-  const parts = dateRangeStr.split('-').map(str => str.trim());
-
-  if (parts.length === 1) {
-    // Trường hợp: "(16)" -> Start = 16, End = 16
-    startStr = parts[0];
-    endStr = parts[0];
-  } else if (parts.length === 2) {
-    // Trường hợp: "(19 - 24)"
-    startStr = parts[0];
-    endStr = parts[1];
-  } else {
-    // Trường hợp rỗng hoặc sai format
-    return { startDate: null, endDate: null };
-  }
-
-  // -- XỬ LÝ END DATE --
-  let endDay, endMonth, endYear = currentYear;
-
-  if (endStr.includes('/')) {
-    const splitEnd = endStr.split('/');
-    endDay = parseInt(splitEnd[1]);
-    endMonth = parseInt(splitEnd[0]);
-  } else {
-    endDay = parseInt(endStr);
-    endMonth = currentMonth;
-  }
-
-  // -- XỬ LÝ START DATE --
-  let startDay, startMonth = currentMonth, startYear = currentYear;
-
-  if (startStr.includes('/')) {
-    const splitStart = startStr.split('/');
-    startDay = parseInt(splitStart[1]);
-    startMonth = parseInt(splitStart[0]);
-  } else {
-    startDay = parseInt(startStr);
-    // Logic: Nếu ngày bắt đầu > ngày kết thúc -> lùi 1 tháng
-    // if (startDay > currentDay) {
-    //   startMonth = currentMonth + 1;
-    //   if (startMonth === 0) {
-    //     startMonth = 12;
-    //     startYear -= 1;
-    //   }
-    // } else {
-    //   startMonth = currentMonth;
-    // }
-  }
-
-  // -- XỬ LÝ GIAO THỪA (29/12 - 1/1) --
-  if (startMonth === 12 && endMonth === 1) {
-    endYear = startYear + 1;
-  }
-
-  return {
-    startDate: dayjs(`${startYear}-${startMonth}-${startDay}`, 'YYYY-M-D'),
-    endDate: dayjs(`${endYear}-${endMonth}-${endDay}`, 'YYYY-M-D')
-  };
-};
-
-/**
- * Hàm Chính: Parse log item
- */
-const parseTrackerItem = (logString) => {
-  if (!logString || typeof logString !== 'string') return null;
-
-  // 1. Tách Link URL
-  const parts = logString.split('|');
-  let contentPart = parts[0].trim();
-  let urlPart = parts[1] ? parts[1].trim() : null;
-
-  // 2. Tìm điểm bắt đầu
-  const prefixMatch = contentPart.match(/(?:for|gallery)\s+/);
-  if (!prefixMatch) return null;
-
-  const specialCharsRegex = /[\p{So}\p{Cf}]/gu;
-    
-    // Thực hiện thay thế: Bỏ dấu ngoặc kép và bỏ các ký tự đặc biệt
-  
-
-  let mainString = contentPart.substring(prefixMatch.index + prefixMatch[0].length).trim();
-  mainString = mainString.replace(/"/g, '').replace(specialCharsRegex, '').trim();
-
-  // 3. Cắt Date (Ngoặc cuối cùng)
-  const dateRegex = /\(([^)]+)\)$/;
-  const dateMatch = mainString.match(dateRegex);
-
-  let rawDate = '';
-  let dates = {};
-  let remaining = ''
-  if (dateMatch) {
-    rawDate = dateMatch[1].trim(); // Có thể là "16" hoặc "19 - 24"
-    // 5. Tính toán ngày
-    dates = calculateDateRange(rawDate);
-    remaining = mainString.substring(0, dateMatch.index).trim();
-  };
-
-  
-
-  // 4. Check SubEvent
-  const subEventRegex = /\(([^)]+)\)$/;
-  const subMatch = remaining.match(subEventRegex);
-
-  let eventName = "";
-  let subEvent = "";
-
-  if (subMatch) {
-    subEvent = subMatch[1].trim();
-    eventName = remaining.substring(0, subMatch.index).trim();
-  } else {
-    eventName = remaining == '' ? mainString : remaining;
-    subEvent = "";
-  }
-
-  return {
-    eventName,
-    subEvent,
-    url: urlPart,
-    originalDate: rawDate,
-    // Format hiển thị
-    startDateObj: dates.startDate,
-    endDateObj: dates.endDate
-  };
-};
-
-// Serve static files from React build folder
+// --- STATIC & FRONTEND SPA SERVING ---
 app.use(express.static(path.join(__dirname, 'build')));
 
 // Fallback: trả về index.html với các route frontend
 app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'build', 'index.html'));
+  const indexPath = path.join(__dirname, 'build', 'index.html');
+  if (fs.existsSync(indexPath)) {
+    res.sendFile(indexPath);
+  } else {
+    res.status(404).send('Not Found');
+  }
 });
 
 app.listen(PORT, () => {
   console.log(`✅ Server running at http://localhost:${PORT}`);
 });
+
+export default app;
