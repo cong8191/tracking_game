@@ -111,32 +111,23 @@ function getLgHeaders(cookies, customHeaders = {}) {
   return finalHeaders;
 }
 
-// Auto-retrying request powered by Axios to avoid Cloudflare fetch HTTP 460 errors
+// Request powered by Axios using FormData directly just like on Node.js
 async function fetchLg(url, options = {}, cookies = '', retries = 2) {
-  let reqOptions = { ...options };
-
-  // Convert FormData to URLSearchParams if it only contains text fields
-  if (reqOptions.body && typeof reqOptions.body === 'object') {
-    if (typeof reqOptions.body.entries === 'function') {
-      let hasFile = false;
-      for (const [_, val] of reqOptions.body.entries()) {
-        if (val instanceof Blob || (typeof val === 'object' && val !== null && typeof val.arrayBuffer === 'function')) {
-          hasFile = true;
-          break;
-        }
-      }
-      if (!hasFile) {
-        const params = new URLSearchParams();
-        for (const [k, v] of reqOptions.body.entries()) {
-          params.append(k, v);
-        }
-        reqOptions.body = params;
-      }
-    }
+  let cleanCookies = '';
+  if (typeof cookies === 'string') {
+    cleanCookies = cookies.replace(/[\r\n]+/g, '').trim();
+  } else if (cookies && typeof cookies === 'object') {
+    cleanCookies = (cookies.cookies || cookies.cookie || '').toString().replace(/[\r\n]+/g, '').trim();
   }
 
-  const headers = getLgHeaders(cookies, reqOptions.headers || {});
-  const method = (reqOptions.method || 'GET').toLowerCase();
+  const method = (options.method || 'POST').toLowerCase();
+  const headers = {
+    'User-Agent': BROWSER_USER_AGENT,
+    ...(options.headers || {})
+  };
+  if (cleanCookies) {
+    headers['Cookie'] = cleanCookies;
+  }
 
   const RETRIABLE_CODES = [460, 520, 521, 502, 503, 504];
 
@@ -146,9 +137,9 @@ async function fetchLg(url, options = {}, cookies = '', retries = 2) {
         url,
         method,
         headers,
-        data: reqOptions.body,
+        data: options.body, // Pass FormData directly just like in server.js
         responseType: 'text',
-        validateStatus: () => true // Allow handling all status codes manually
+        validateStatus: () => true
       });
 
       if (RETRIABLE_CODES.includes(res.status) && attempt < retries) {
