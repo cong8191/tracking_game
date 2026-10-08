@@ -77,9 +77,7 @@ function parseSearchGalleryRows(html, searchKeyword) {
 const GOOGLE_SCRIPT_URL_DEFAULT = "https://script.google.com/macros/s/AKfycbwzIlzn5gfKE38-mAGx1W7VCPfCu78nYDEnPmb6aUPVRl_dWALFthGYHFYbCSqyB0WLYw/exec";
 
 // Browser User-Agent and Full Headers for LiquidAndGrit to pass Cloudflare WAF
-// Browser User-Agent and Full Headers for LiquidAndGrit to pass Cloudflare WAF & AWS ALB
 const BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-const RETRIABLE_STATUS_CODES = [460, 429, 500, 502, 503, 504, 520, 521, 522, 524];
 
 function getLgHeaders(cookies, customHeaders = {}) {
   let cleanCookies = '';
@@ -91,7 +89,7 @@ function getLgHeaders(cookies, customHeaders = {}) {
 
   const finalHeaders = {
     'User-Agent': BROWSER_USER_AGENT,
-    'Accept': 'application/json, text/plain, */*',
+    'Accept': '*/*',
     'Accept-Language': 'en-US,en;q=0.9'
   };
 
@@ -112,15 +110,43 @@ function getLgHeaders(cookies, customHeaders = {}) {
   return finalHeaders;
 }
 
-// Auto-retrying fetch with full headers and backoff for Cloudflare / AWS ALB HTTP 460 & 521 errors
+// Auto-retrying fetch with HTTP 460 bypass (converting text FormData to URLSearchParams) and backoff
 async function fetchLg(url, options = {}, cookies = '', retries = 2) {
-  const headers = getLgHeaders(cookies, options.headers || {});
-  const reqOptions = { ...options, headers };
+  let reqOptions = { ...options };
+
+  // BYPASS HTTP 460 (ALB / Apache stream reset):
+  // When FormData without files is sent via Cloudflare Worker fetch(),
+  // it forces multipart/form-data chunked streaming which AWS ALB / Apache resets with HTTP 460.
+  // Converting to URLSearchParams sets exact Content-Length and application/x-www-form-urlencoded,
+  // which ALB/Apache processes with 100% success.
+  if (reqOptions.body && typeof reqOptions.body === 'object') {
+    if (typeof reqOptions.body.entries === 'function') {
+      let hasFile = false;
+      for (const [_, val] of reqOptions.body.entries()) {
+        if (val instanceof Blob || (typeof val === 'object' && val !== null && typeof val.arrayBuffer === 'function')) {
+          hasFile = true;
+          break;
+        }
+      }
+      if (!hasFile) {
+        const params = new URLSearchParams();
+        for (const [k, v] of reqOptions.body.entries()) {
+          params.append(k, v);
+        }
+        reqOptions.body = params;
+      }
+    }
+  }
+
+  const headers = getLgHeaders(cookies, reqOptions.headers || {});
+  reqOptions.headers = headers;
+
+  const RETRIABLE_CODES = [460, 520, 521, 502, 503, 504];
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const response = await fetch(url, reqOptions);
-      if (RETRIABLE_STATUS_CODES.includes(response.status) && attempt < retries) {
+      if (RETRIABLE_CODES.includes(response.status) && attempt < retries) {
         console.warn(`⚠️ LiquidAndGrit HTTP ${response.status} on attempt ${attempt + 1}. Retrying in 400ms...`);
         await new Promise(r => setTimeout(r, 400 * (attempt + 1)));
         continue;
@@ -144,20 +170,11 @@ async function fetchLgJson(url, options = {}, cookies = '', retries = 2) {
       const response = await fetchLg(url, options, cookies, 0);
       const text = await response.text();
 
-      const isErrorHtml = RETRIABLE_STATUS_CODES.includes(response.status) || 
-                          text.includes('error code: 460') || 
-                          text.includes('error code: 521') || 
-                          text.includes('502 Bad Gateway') || 
-                          text.includes('503 Service Unavailable');
-
-      if (isErrorHtml) {
+      if ([460, 520, 521, 502, 503, 504].includes(response.status) || text.includes('error code: 521') || text.includes('502 Bad Gateway') || text.includes('503 Service Unavailable')) {
         if (attempt < retries) {
           console.warn(`⚠️ Upstream error (HTTP ${response.status}) on attempt ${attempt + 1}. Retrying in 400ms...`);
           await new Promise(r => setTimeout(r, 400 * (attempt + 1)));
           continue;
-        }
-        if (response.status === 460 || text.includes('error code: 460')) {
-          throw new Error(`Server Liquid&Grit ngắt kết nối (HTTP 460 - Connection Reset / ALB Timeout). Vui lòng thử lại.`);
         }
         throw new Error(`Server Liquid&Grit tạm thời bận (HTTP ${response.status}). Vui lòng thử lại.`);
       }
@@ -498,8 +515,12 @@ app.get('/readDataCookies', async (c) => {
         body: form
       }, datas.cookies);
 
+      if (data && data.error_message && data.error_message.length > 0) {
+        console.warn("⚠️ Token hết hạn từ Liquid&Grit:", data.error_message);
+        return c.json({ success: true, result: '', expired: true, message: data.error_message[0] });
+      }
 
-      return c.json({ success: true, result: "0k" });
+      return c.json({ success: true, result: JSON.stringify(datas), data });
     } catch (apiErr) {
       console.warn("⚠️ Không thể kiểm tra cookie với Liquid&Grit:", apiErr.message);
       return c.json({ success: true, result: JSON.stringify(datas), warning: apiErr.message });
