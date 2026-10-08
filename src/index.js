@@ -1475,7 +1475,13 @@ app.post('/show-data', async (c) => {
 
     let response = await axios.post('https://my.liquidandgrit.com/action/public/cms/plugin', form, {
       headers: {
-        Cookie: datas.cookies
+        Cookie: datas.cookies,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'Accept': '*/*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Origin': 'https://my.liquidandgrit.com',
+        'Referer': 'https://my.liquidandgrit.com/',
+        
       },
       responseType: "text"
     });
