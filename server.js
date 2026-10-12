@@ -33,24 +33,33 @@ app.use(cors());
 
 // --- KẾT NỐI POSTGRES ---
 const { Pool } = pg;
+const hasDbUrl = Boolean(process.env.DATABASE_URL);
+
+if (!hasDbUrl) {
+  console.warn('⚠️ [CẢNH BÁO] Biến môi trường DATABASE_URL chưa được cấu hình!');
+  console.warn('👉 Vui lòng vào Deno Deploy (deno.com) -> Project -> Settings -> Environment Variables để thêm DATABASE_URL.');
+}
+
 const db = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: {
+  ssl: process.env.DATABASE_URL ? {
     rejectUnauthorized: false,
-  },
+  } : false,
   connectionTimeoutMillis: 10000,
   idleTimeoutMillis: 30000,
   max: 20,
 });
 
-db.connect()
-  .then(client => {
-    console.log('✅ Đã kết nối PostgreSQL thành công!');
-    client.release();
-  })
-  .catch(err => {
-    console.error('❌ Lỗi kết nối Database:', err.message);
-  });
+if (hasDbUrl) {
+  db.connect()
+    .then(client => {
+      console.log('✅ Đã kết nối PostgreSQL thành công!');
+      client.release();
+    })
+    .catch(err => {
+      console.error('❌ Lỗi kết nối Database:', err.message);
+    });
+}
 
 const GOOGLE_SCRIPT_URL = process.env.GOOGLE_SCRIPT_URL || "https://script.google.com/macros/s/AKfycbwzIlzn5gfKE38-mAGx1W7VCPfCu78nYDEnPmb6aUPVRl_dWALFthGYHFYbCSqyB0WLYw/exec";
 const BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
@@ -560,6 +569,12 @@ app.get('/games', async (req, res) => {
   const date = req.query.date;
   if (!date) return res.status(400).json({ error: 'Missing date parameter' });
 
+  if (!process.env.DATABASE_URL) {
+    return res.status(500).json({
+      error: 'Chưa cấu hình biến môi trường DATABASE_URL trên Deno Deploy. Vui lòng vào Deno Deploy (deno.com) -> Settings -> Environment Variables để thêm DATABASE_URL.'
+    });
+  }
+
   try {
     const sql = `
       SELECT 
@@ -800,6 +815,10 @@ app.get('/template-sqlite.db', (req, res, next) => {
 
 // GET /events
 app.get('/events', async (req, res) => {
+  if (!process.env.DATABASE_URL) {
+    return res.status(500).json({ error: 'Chưa cấu hình DATABASE_URL trên Deno Deploy' });
+  }
+
   try {
     const sql = `
       SELECT event.*, games.name AS "gameName"
@@ -810,19 +829,23 @@ app.get('/events', async (req, res) => {
     res.json(resDb.rows);
   } catch (err) {
     console.error('❌ DB error in /events:', err.message);
-    res.status(500).json({ error: 'Database error' });
+    res.status(500).json({ error: err.message || 'Database error' });
   }
 });
 
 // GET /listGame
 app.get('/listGame', async (req, res) => {
+  if (!process.env.DATABASE_URL) {
+    return res.status(500).json({ error: 'Chưa cấu hình DATABASE_URL trên Deno Deploy' });
+  }
+
   try {
     const sql = `SELECT * from games`;
     const resDb = await db.query(sql, []);
     res.json(resDb.rows);
   } catch (err) {
     console.error('❌ DB error in /listGame:', err.message);
-    res.status(500).json({ error: 'Database error' });
+    res.status(500).json({ error: err.message || 'Database error' });
   }
 });
 
@@ -944,7 +967,7 @@ app.post('/createNewGallery', async (req, res) => {
     }, datas.cookies);
 
     const currentDate = dayjs();
-    const pastDate = currentDate.subtract(7, 'hour');
+    const pastDate = currentDate;
 
     form = new FormData();
     form.append('csrf', datas.csrf);
